@@ -17,6 +17,7 @@ export interface Project {
   id: string;
   name: string;
   files: FileNode[];
+  githubRepo?: string;
 }
 
 export interface Tab {
@@ -33,6 +34,17 @@ export interface PuterAIModel {
   label: string;
   provider: string;
   color: string;
+}
+
+export type ApiProvider = 'anthropic' | 'google' | 'openai' | 'perplexity' | 'vercel';
+
+export interface ApiKeyEntry {
+  id: string;
+  provider: ApiProvider;
+  key: string;
+  label?: string;
+  addedAt: number;
+  valid?: boolean | null;
 }
 
 export interface AISettings {
@@ -58,4 +70,6 @@ export interface AppSettings {
   ai: AISettings;
   github: GitHubSettings;
   editorFontSize: number;
+  apiKeys: ApiKeyEntry[];
+  systemPrompt: string;
 }

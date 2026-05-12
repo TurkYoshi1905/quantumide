@@ -7,11 +7,10 @@ import {
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { useApp } from "@/contexts/AppContext";
-import { callPuterAI, PUTER_MODELS, getModelById, parseFilesFromAIResponse, AI_SYSTEM_PROMPT } from "@/lib/ai";
+import { callPuterAI, ALL_MODELS, getModelById, parseFilesFromAIResponse } from "@/lib/ai";
 import type { ChatMessage } from "@/types";
 import VibeCodingModal from "./VibeCodingModal";
 
-// ── Step-by-step file operation display ──────────────────────────────────
 interface FileStep {
   filename: string;
   status: 'pending' | 'working' | 'done' | 'error';
@@ -58,10 +57,7 @@ function FileStepsCard({ steps }: { steps: FileStep[] }) {
                 : (step.status === 'done' ? 'Güncellendi' : step.status === 'working' ? 'Düzenleniyor...' : step.status === 'error' ? 'Hata' : 'Bekliyor')
               }
             </span>
-            {step.isNew
-              ? <FilePlus2 size={11} className="text-muted-foreground shrink-0" />
-              : <FileEdit size={11} className="text-muted-foreground shrink-0" />
-            }
+            {step.isNew ? <FilePlus2 size={11} className="text-muted-foreground shrink-0" /> : <FileEdit size={11} className="text-muted-foreground shrink-0" />}
           </motion.div>
         ))}
       </div>
@@ -69,9 +65,7 @@ function FileStepsCard({ steps }: { steps: FileStep[] }) {
   );
 }
 
-// ── Text message display (no raw code blocks) ─────────────────────────────
 function MessageContent({ content }: { content: string }) {
-  // Strip code blocks — they are applied to files, don't show raw code
   const withoutCode = content
     .replace(/```[\s\S]*?```/g, '')
     .replace(/\n{3,}/g, '\n\n')
@@ -90,7 +84,16 @@ function MessageContent({ content }: { content: string }) {
   );
 }
 
-// ── Main AIPanel ──────────────────────────────────────────────────────────
+const PROVIDER_COLORS: Record<string, string> = {
+  openai: 'text-green-400',
+  anthropic: 'text-orange-400',
+  google: 'text-blue-400',
+  mistral: 'text-purple-400',
+  deepseek: 'text-cyan-400',
+  meta: 'text-pink-400',
+  perplexity: 'text-yellow-400',
+};
+
 export default function AIPanel() {
   const {
     settings, updateSettings, messages, addMessage, clearMessages,
@@ -99,6 +102,7 @@ export default function AIPanel() {
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const [modelSearch, setModelSearch] = useState('');
   const [showVibeCoding, setShowVibeCoding] = useState(false);
   const [fileSteps, setFileSteps] = useState<FileStep[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -108,7 +112,8 @@ export default function AIPanel() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping, fileSteps]);
 
-  const activeModel = getModelById(settings.ai.activeModel);
+  const activeModelInfo = ALL_MODELS.find(m => m.id === settings.ai.activeModel || m.puterModel === settings.ai.activeModel);
+  const activeModelFallback = getModelById(settings.ai.activeModel);
 
   const getActiveFileContent = () => {
     if (!activeTab) return '';
@@ -124,10 +129,8 @@ export default function AIPanel() {
     return search(project.files);
   };
 
-  // Apply parsed files one-by-one with step animation
   const applyFilesStepByStep = async (parsed: ReturnType<typeof parseFilesFromAIResponse>) => {
     if (!parsed.length) return;
-
     const target = activeProject || projects[0];
     if (!target) return;
 
@@ -141,7 +144,6 @@ export default function AIPanel() {
     };
     const existingFiles = getAllFiles(target.files);
 
-    // Initialize all steps as pending
     const steps: FileStep[] = parsed.map(pf => ({
       filename: pf.filename,
       status: 'pending',
@@ -151,7 +153,6 @@ export default function AIPanel() {
 
     for (let i = 0; i < parsed.length; i++) {
       const pf = parsed[i];
-      // Mark current step as working
       setFileSteps(prev => prev.map((s, idx) => idx === i ? { ...s, status: 'working' } : s));
       await new Promise(r => setTimeout(r, 500 + i * 150));
 
@@ -162,9 +163,7 @@ export default function AIPanel() {
           openFile(existing, target);
         } else {
           createFile(target.id, null, pf.filename, 'file');
-          // Small delay so the file is created in state, then open it
           await new Promise(r => setTimeout(r, 200));
-          // Try to find and open it after creation
           const updatedProject = projects.find(p => p.id === target.id);
           if (updatedProject) {
             const newFile = getAllFiles(updatedProject.files).find(f => f.name === pf.filename);
@@ -176,8 +175,6 @@ export default function AIPanel() {
         setFileSteps(prev => prev.map((s, idx) => idx === i ? { ...s, status: 'error' } : s));
       }
     }
-
-    // Clear steps after 4 seconds
     setTimeout(() => setFileSteps([]), 4000);
   };
 
@@ -191,19 +188,16 @@ export default function AIPanel() {
     setIsTyping(true);
     setFileSteps([]);
 
+    const systemPrompt = settings.systemPrompt;
     const conversationHistory = [
-      { role: 'system', content: AI_SYSTEM_PROMPT },
+      { role: 'system', content: systemPrompt },
       ...messages.filter(m => !m.isTyping).slice(-8).map(m => ({ role: m.role, content: m.content })),
       { role: 'user', content: msgText }
     ];
 
     try {
-      const response = await callPuterAI(settings.ai.activeModel, conversationHistory);
-
-      // Parse files before adding to messages (to strip code from display)
+      const response = await callPuterAI(settings.ai.activeModel, conversationHistory, settings.apiKeys);
       const parsed = parseFilesFromAIResponse(response);
-
-      // Build display text (remove code blocks if files were parsed)
       const displayContent = parsed.length > 0
         ? response.replace(/```[\s\S]*?```/g, '').replace(/\n{3,}/g, '\n\n').trim()
         : response;
@@ -214,9 +208,7 @@ export default function AIPanel() {
         timestamp: Date.now()
       });
 
-      if (parsed.length > 0) {
-        await applyFilesStepByStep(parsed);
-      }
+      if (parsed.length > 0) await applyFilesStepByStep(parsed);
     } catch {
       addMessage({ id: `e-${Date.now()}`, role: 'assistant', content: 'Bir hata oluştu. Lütfen tekrar deneyin.', timestamp: Date.now() });
     } finally {
@@ -227,6 +219,16 @@ export default function AIPanel() {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   };
+
+  const filteredModels = ALL_MODELS.filter(m =>
+    m.id.toLowerCase().includes(modelSearch.toLowerCase()) ||
+    m.label.toLowerCase().includes(modelSearch.toLowerCase()) ||
+    m.provider.toLowerCase().includes(modelSearch.toLowerCase())
+  );
+
+  const displayName = activeModelInfo?.label || activeModelFallback.label;
+  const displayProvider = activeModelInfo?.provider || activeModelFallback.provider;
+  const displayColor = PROVIDER_COLORS[activeModelInfo?.provider || ''] || 'text-primary';
 
   return (
     <div className="h-full flex flex-col bg-card border-l border-border overflow-hidden">
@@ -245,12 +247,12 @@ export default function AIPanel() {
         {/* Model Selector */}
         <div className="relative">
           <button
-            onClick={() => setShowModelDropdown(o => !o)}
+            onClick={() => { setShowModelDropdown(o => !o); setModelSearch(''); }}
             className="w-full flex items-center gap-2 px-2 py-1.5 bg-muted rounded-lg text-xs hover:bg-muted/80 transition-colors border border-border"
           >
-            <Sparkles size={11} className={activeModel.color} />
-            <span className={`flex-1 text-left ${activeModel.color} truncate`}>{activeModel.label}</span>
-            <span className="text-muted-foreground text-xs shrink-0">{activeModel.provider}</span>
+            <Sparkles size={11} className={displayColor} />
+            <span className={`flex-1 text-left ${displayColor} truncate`}>{displayName}</span>
+            <span className="text-muted-foreground text-xs shrink-0 capitalize">{displayProvider}</span>
             <ChevronDown size={11} className="text-muted-foreground shrink-0" />
           </button>
 
@@ -260,34 +262,46 @@ export default function AIPanel() {
                 <div className="fixed inset-0 z-40" onClick={() => setShowModelDropdown(false)} />
                 <motion.div
                   initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}
-                  className="absolute top-full left-0 right-0 mt-1 bg-popover border border-popover-border rounded-lg shadow-xl z-50 overflow-hidden py-1 max-h-64 overflow-y-auto"
+                  className="absolute top-full left-0 right-0 mt-1 bg-popover border border-popover-border rounded-lg shadow-xl z-50 overflow-hidden"
                 >
-                  {PUTER_MODELS.map(opt => (
-                    <button
-                      key={opt.id}
-                      onClick={() => { updateSettings({ ...settings, ai: { ...settings.ai, activeModel: opt.id } }); setShowModelDropdown(false); }}
-                      className={`w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 transition-colors ${opt.id === settings.ai.activeModel ? 'bg-primary/10' : ''}`}
-                    >
-                      <Sparkles size={11} className={opt.color} />
-                      <span className={`${opt.color} flex-1 text-left truncate`}>{opt.label}</span>
-                      <span className="text-muted-foreground">{opt.provider}</span>
-                      {opt.id === settings.ai.activeModel && <span className="ml-1 text-primary shrink-0">Aktif</span>}
-                    </button>
-                  ))}
+                  <div className="p-2 border-b border-border">
+                    <input
+                      autoFocus
+                      value={modelSearch}
+                      onChange={e => setModelSearch(e.target.value)}
+                      placeholder="Model ara... (anthropic/claude)"
+                      className="w-full px-2 py-1.5 bg-muted rounded text-xs text-foreground placeholder:text-muted-foreground outline-none border border-border focus:border-primary"
+                    />
+                  </div>
+                  <div className="max-h-56 overflow-y-auto py-1">
+                    {filteredModels.map(opt => (
+                      <button
+                        key={opt.id}
+                        onClick={() => { updateSettings({ ...settings, ai: { ...settings.ai, activeModel: opt.id } }); setShowModelDropdown(false); }}
+                        className={`w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 transition-colors ${opt.id === settings.ai.activeModel ? 'bg-primary/10' : ''}`}
+                      >
+                        <Sparkles size={11} className={PROVIDER_COLORS[opt.provider] || 'text-primary'} />
+                        <span className="flex-1 text-left text-foreground truncate font-mono">{opt.id}</span>
+                        <span className="text-muted-foreground shrink-0">{opt.context}</span>
+                        {opt.id === settings.ai.activeModel && <span className="ml-1 text-primary shrink-0">Aktif</span>}
+                      </button>
+                    ))}
+                  </div>
                 </motion.div>
               </>
             )}
           </AnimatePresence>
         </div>
 
-        {/* Puter status */}
-        {!settings.ai.puterConnected ? (
+        {/* Connection status */}
+        {!settings.ai.puterConnected && settings.apiKeys.length === 0 ? (
           <button onClick={() => setLocation('/settings')} className="mt-1.5 w-full flex items-center gap-1.5 px-2 py-1 rounded-md bg-primary/10 border border-primary/20 text-xs text-primary hover:bg-primary/20 transition-colors">
-            <Code2 size={10} /><span>Puter bağla — sınırsız AI kullan</span>
+            <Code2 size={10} /><span>API anahtarı ekle veya Puter bağla</span>
           </button>
         ) : (
           <div className="mt-1.5 flex items-center gap-1.5 px-2 py-1 rounded-md bg-accent/10 text-xs text-accent">
-            <Zap size={10} /><span>Puter bağlı — sınırsız kullanım aktif</span>
+            <Zap size={10} />
+            <span>{settings.ai.puterConnected ? 'Puter bağlı — sınırsız kullanım' : `${settings.apiKeys.length} API anahtarı aktif`}</span>
           </div>
         )}
       </div>
@@ -338,7 +352,6 @@ export default function AIPanel() {
           ))}
         </AnimatePresence>
 
-        {/* AI thinking indicator */}
         {isTyping && (
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex gap-2">
             <div className="w-6 h-6 rounded-full bg-accent/20 flex items-center justify-center mt-0.5">
@@ -347,13 +360,12 @@ export default function AIPanel() {
             <div className="px-3 py-2 bg-muted rounded-xl rounded-tl-sm">
               <div className="flex gap-1 items-center">
                 <Loader2 size={12} className="animate-spin text-primary" />
-                <span className="text-xs text-muted-foreground">{activeModel.label} düşünüyor...</span>
+                <span className="text-xs text-muted-foreground">{displayName} düşünüyor...</span>
               </div>
             </div>
           </motion.div>
         )}
 
-        {/* File operation steps */}
         {fileSteps.length > 0 && (
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="pl-8">
             <FileStepsCard steps={fileSteps} />

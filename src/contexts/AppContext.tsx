@@ -1,27 +1,12 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import type { User, Project, FileNode, Tab, AppSettings, ChatMessage } from "@/types";
 import { dbSaveProjects, dbLoadProjects, dbSet, dbGet } from "@/lib/db";
-
-const DEFAULT_PROJECT: Project = {
-  id: 'proj-1',
-  name: 'İlk Projem',
-  files: [
-    { id: 'f1', name: 'index.html', type: 'file', content: '<!DOCTYPE html>\n<html lang="tr">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>QuantumIDE Projesi</title>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <div class="container">\n    <h1>Merhaba, QuantumIDE!</h1>\n    <p>Yapay zeka destekli geliştirme ortamına hoş geldiniz.</p>\n    <button onclick="merhaba()">Tıkla</button>\n  </div>\n  <script src="script.js"></script>\n</body>\n</html>' },
-    { id: 'f2', name: 'style.css', type: 'file', content: '* {\n  box-sizing: border-box;\n  margin: 0;\n  padding: 0;\n}\n\nbody {\n  font-family: "Inter", sans-serif;\n  background: #0a0e1a;\n  color: #e2e8f0;\n  min-height: 100vh;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n}\n\n.container {\n  text-align: center;\n  padding: 2rem;\n}\n\nh1 {\n  font-size: 2.5rem;\n  background: linear-gradient(135deg, #7c3aed, #10b981);\n  -webkit-background-clip: text;\n  -webkit-text-fill-color: transparent;\n  margin-bottom: 1rem;\n}\n\np {\n  color: #94a3b8;\n  margin-bottom: 2rem;\n}\n\nbutton {\n  background: #7c3aed;\n  color: white;\n  border: none;\n  padding: 0.75rem 2rem;\n  border-radius: 0.5rem;\n  cursor: pointer;\n  font-size: 1rem;\n  transition: all 0.2s;\n}\n\nbutton:hover {\n  background: #6d28d9;\n  transform: translateY(-2px);\n}' },
-    { id: 'f3', name: 'script.js', type: 'file', content: 'function merhaba() {\n  const mesaj = document.createElement("p");\n  mesaj.textContent = "QuantumIDE ile kodlamaya hoş geldiniz!";\n  mesaj.style.cssText = "color: #10b981; margin-top: 1rem; font-size: 1.2rem;";\n  document.querySelector(".container").appendChild(mesaj);\n}\n\nconsole.log("QuantumIDE - Yapay Zeka Destekli Geliştirme Ortamı");\n' },
-    {
-      id: 'folder-src', name: 'src', type: 'folder', children: [
-        { id: 'f4', name: 'app.js', type: 'file', content: '// Ana uygulama mantığı\nconst App = {\n  init() {\n    console.log("Uygulama başlatılıyor...");\n    this.render();\n  },\n  render() {\n    console.log("Bileşenler render ediliyor...");\n  }\n};\n\nApp.init();\n' },
-        { id: 'f5', name: 'utils.js', type: 'file', content: '// Yardımcı fonksiyonlar\nexport const formatDate = (date) => {\n  return new Intl.DateTimeFormat("tr-TR").format(date);\n};\n\nexport const debounce = (fn, delay) => {\n  let timer;\n  return (...args) => {\n    clearTimeout(timer);\n    timer = setTimeout(() => fn(...args), delay);\n  };\n};\n' }
-      ]
-    }
-  ]
-};
+import { DEFAULT_SYSTEM_PROMPT } from "@/lib/ai";
 
 const INIT_MESSAGE: ChatMessage = {
   id: 'init-1',
   role: 'assistant',
-  content: 'Merhaba! Ben QuantumIDE yapay zeka asistanıyım.\n\nPuter hesabınızı **Ayarlar > AI Modelleri** bölümünden bağlayarak GPT-4o, Claude, Gemini ve daha fazlasını **ücretsiz** kullanabilirsiniz.\n\nNasıl yardımcı olabilirim?',
+  content: 'Merhaba! Ben QuantumIDE yapay zeka asistanıyım.\n\nAyarlar bölümünden API anahtarınızı ekleyerek veya Puter hesabınızı bağlayarak AI modellerini kullanabilirsiniz.\n\nNasıl yardımcı olabilirim?',
   timestamp: Date.now()
 };
 
@@ -29,6 +14,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   ai: { activeModel: 'gpt-4o', puterConnected: false },
   github: { connected: false, token: '' },
   editorFontSize: 14,
+  apiKeys: [],
+  systemPrompt: DEFAULT_SYSTEM_PROMPT,
 };
 
 interface GlowingFile { [fileId: string]: boolean }
@@ -52,7 +39,8 @@ interface AppContextType {
   createFile: (projectId: string, parentId: string | null, name: string, type: 'file' | 'folder') => void;
   deleteFile: (projectId: string, fileId: string) => void;
   renameFile: (projectId: string, fileId: string, newName: string) => void;
-  createProject: (name: string) => void;
+  createProject: (name: string, files?: FileNode[]) => Project;
+  deleteProject: (projectId: string) => void;
   settings: AppSettings;
   updateSettings: (settings: AppSettings) => void;
   messages: ChatMessage[];
@@ -71,7 +59,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [dbReady, setDbReady] = useState(false);
   const [user, setUserState] = useState<User | null>(null);
   const [puterUser, setPuterUserState] = useState<any>(null);
-  const [projects, setProjectsState] = useState<Project[]>([DEFAULT_PROJECT]);
+  const [projects, setProjectsState] = useState<Project[]>([]);
   const [activeProject, setActiveProjectState] = useState<Project | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTab, setActiveTabState] = useState<Tab | null>(null);
@@ -80,11 +68,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [glowingFiles, setGlowingFiles] = useState<GlowingFile>({});
   const [savedTab, setSavedTab] = useState<string | null>(null);
 
-  // Debounce timer refs for IndexedDB writes
   const projectSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messageSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load everything from IndexedDB on mount
   useEffect(() => {
     async function initDB() {
       try {
@@ -97,13 +83,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         const loadedProjects = (savedProjects as Project[]).length > 0
           ? (savedProjects as Project[])
-          : [DEFAULT_PROJECT];
+          : [];
 
         setProjectsState(loadedProjects);
         setActiveProjectState(loadedProjects[0] || null);
         setMessages(savedMessages.length > 0 ? savedMessages : [INIT_MESSAGE]);
 
-        // Migrate old settings shape
         const merged: AppSettings = {
           ai: {
             activeModel: savedSettings?.ai?.activeModel || 'gpt-4o',
@@ -111,17 +96,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           },
           github: savedSettings?.github || DEFAULT_SETTINGS.github,
           editorFontSize: savedSettings?.editorFontSize || 14,
+          apiKeys: savedSettings?.apiKeys || [],
+          systemPrompt: savedSettings?.systemPrompt || DEFAULT_SYSTEM_PROMPT,
         };
         setSettingsState(merged);
         setUserState(savedUser);
       } catch (e) {
-        console.error('IndexedDB yüklenemedi, localStorage fallback kullanılıyor.', e);
-        // Fallback to localStorage
+        console.error('IndexedDB yüklenemedi, localStorage fallback.', e);
         try {
           const sp = JSON.parse(localStorage.getItem('qide_projects') || 'null');
           if (sp) { setProjectsState(sp); setActiveProjectState(sp[0] || null); }
           const ss = JSON.parse(localStorage.getItem('qide_settings') || 'null');
-          if (ss) setSettingsState(ss);
+          if (ss) setSettingsState({ ...DEFAULT_SETTINGS, ...ss });
           const su = JSON.parse(localStorage.getItem('qide_user') || 'null');
           if (su) setUserState(su);
         } catch { /* ignore */ }
@@ -132,7 +118,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     initDB();
   }, []);
 
-  // Check Puter auth status after DB ready
   useEffect(() => {
     if (!dbReady) return;
     const checkPuter = async () => {
@@ -154,19 +139,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setTimeout(checkPuter, 800);
   }, [dbReady]);
 
-  // Debounced save helpers
   const debouncedSaveProjects = useCallback((updated: Project[]) => {
     if (projectSaveTimer.current) clearTimeout(projectSaveTimer.current);
-    projectSaveTimer.current = setTimeout(() => {
-      dbSaveProjects(updated);
-    }, 400);
+    projectSaveTimer.current = setTimeout(() => { dbSaveProjects(updated); }, 400);
   }, []);
 
   const debouncedSaveMessages = useCallback((updated: ChatMessage[]) => {
     if (messageSaveTimer.current) clearTimeout(messageSaveTimer.current);
-    messageSaveTimer.current = setTimeout(() => {
-      dbSet('messages', updated);
-    }, 400);
+    messageSaveTimer.current = setTimeout(() => { dbSet('messages', updated); }, 400);
   }, []);
 
   const setUser = useCallback((u: User | null) => {
@@ -174,18 +154,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     dbSet('user', u);
   }, []);
 
-  const setPuterUser = useCallback((u: any) => {
-    setPuterUserState(u);
-  }, []);
+  const setPuterUser = useCallback((u: any) => { setPuterUserState(u); }, []);
 
   const setProjects = useCallback((p: Project[]) => {
     setProjectsState(p);
     debouncedSaveProjects(p);
   }, [debouncedSaveProjects]);
 
-  const setActiveProject = useCallback((p: Project | null) => {
-    setActiveProjectState(p);
-  }, []);
+  const setActiveProject = useCallback((p: Project | null) => { setActiveProjectState(p); }, []);
 
   const updateSettings = useCallback((s: AppSettings) => {
     setSettingsState(s);
@@ -232,8 +208,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const createFile = useCallback((projectId: string, parentId: string | null, name: string, type: 'file' | 'folder') => {
     const newFile: FileNode = {
       id: `f-${Date.now()}`,
-      name,
-      type,
+      name, type,
       content: type === 'file' ? '' : undefined,
       children: type === 'folder' ? [] : undefined
     };
@@ -276,24 +251,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setTabs(prev => prev.map(t => t.fileId === fileId ? { ...t, name: newName } : t));
   }, [debouncedSaveProjects]);
 
-  const createProject = useCallback((name: string) => {
+  const createProject = useCallback((name: string, files: FileNode[] = []): Project => {
     const ts = Date.now();
-    const newProject: Project = {
-      id: `proj-${ts}`,
-      name,
-      files: [
-        { id: `f-${ts}-1`, name: 'index.html', type: 'file', content: `<!DOCTYPE html>\n<html lang="tr">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>${name}</title>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <h1>${name}</h1>\n  <script src="script.js"></script>\n</body>\n</html>` },
-        { id: `f-${ts}-2`, name: 'style.css', type: 'file', content: `body { font-family: sans-serif; background: #0a0e1a; color: #e2e8f0; padding: 2rem; }\nh1 { color: #7c3aed; }` },
-        { id: `f-${ts}-3`, name: 'script.js', type: 'file', content: `console.log("${name} başlatıldı");` },
-      ]
-    };
+    const newProject: Project = { id: `proj-${ts}`, name, files };
     setProjectsState(prev => {
       const updated = [...prev, newProject];
       debouncedSaveProjects(updated);
       return updated;
     });
     setActiveProjectState(newProject);
+    return newProject;
   }, [debouncedSaveProjects]);
+
+  const deleteProject = useCallback((projectId: string) => {
+    setProjectsState(prev => {
+      const updated = prev.filter(p => p.id !== projectId);
+      debouncedSaveProjects(updated);
+      if (activeProject?.id === projectId) {
+        setActiveProjectState(updated[0] || null);
+      }
+      return updated;
+    });
+    setTabs(prev => prev.filter(t => t.projectId !== projectId));
+  }, [activeProject, debouncedSaveProjects]);
 
   const addMessage = useCallback((msg: ChatMessage) => {
     setMessages(prev => {
@@ -327,7 +307,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       activeProject, setActiveProject,
       tabs, activeTab, openFile, closeTab, setActiveTab,
       updateFileContent, saveActiveFile,
-      createFile, deleteFile, renameFile, createProject,
+      createFile, deleteFile, renameFile, createProject, deleteProject,
       settings, updateSettings,
       messages, addMessage, clearMessages,
       glowingFiles, setGlowingFile,

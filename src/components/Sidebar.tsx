@@ -8,8 +8,8 @@ import {
 import { useApp } from "@/contexts/AppContext";
 import type { FileNode, Project } from "@/types";
 import { useLocation } from "wouter";
+import NewProjectModal from "./NewProjectModal";
 
-// File color by extension
 function fileColor(name: string) {
   const ext = name.split('.').pop()?.toLowerCase() || '';
   return { html: 'text-orange-400', css: 'text-blue-400', js: 'text-yellow-400',
@@ -69,7 +69,6 @@ function FileTreeNode({ node, project, depth, onContextMenu }: FileTreeNodeProps
   );
 }
 
-// Project list card
 function ProjectCard({ project, isActive, onClick, onDelete, onRename }: {
   project: Project; isActive: boolean;
   onClick: () => void; onDelete: () => void; onRename: () => void;
@@ -132,12 +131,10 @@ function ProjectCard({ project, isActive, onClick, onDelete, onRename }: {
 interface ContextMenuState { visible: boolean; x: number; y: number; fileId: string | null; projectId: string | null; isFolder: boolean }
 
 export default function Sidebar() {
-  const { user, setUser, projects, setProjects, activeProject, setActiveProject, createFile, deleteFile, renameFile, createProject, openFile } = useApp();
+  const { user, setUser, projects, setProjects, activeProject, setActiveProject, deleteProject, createFile, deleteFile, renameFile, openFile } = useApp();
 
-  // View: 'projects' | 'files'
   const [view, setView] = useState<'projects' | 'files'>('projects');
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, fileId: null, projectId: null, isFolder: false });
-  const [newProjectName, setNewProjectName] = useState('');
   const [showNewProject, setShowNewProject] = useState(false);
   const [renaming, setRenaming] = useState<{ fileId: string; projectId: string; name: string } | null>(null);
   const [renamingProject, setRenamingProject] = useState<{ id: string; name: string } | null>(null);
@@ -173,7 +170,6 @@ export default function Sidebar() {
   const openProject = (project: Project) => {
     setActiveProject(project);
     setView('files');
-    // Auto-open first file
     const firstFile = (function findFirst(files: FileNode[]): FileNode | null {
       for (const f of files) { if (f.type === 'file') return f; if (f.children) { const found = findFirst(f.children); if (found) return found; } }
       return null;
@@ -181,16 +177,15 @@ export default function Sidebar() {
     if (firstFile) openFile(firstFile, project);
   };
 
-  const deleteProject = (projectId: string) => {
-    const updated = projects.filter(p => p.id !== projectId);
-    setProjects(updated);
-    if (activeProject?.id === projectId) {
-      setActiveProject(updated[0] || null);
-      if (view === 'files') setView('projects');
+  const handleProjectCreated = (projectId: string) => {
+    const project = projects.find(p => p.id === projectId);
+    if (project) {
+      setActiveProject(project);
+      setView('files');
     }
   };
 
-  const renameProject = (projectId: string, newName: string) => {
+  const renameProjectLocal = (projectId: string, newName: string) => {
     setProjects(projects.map(p => p.id === projectId ? { ...p, name: newName } : p));
     if (activeProject?.id === projectId) setActiveProject({ ...activeProject, name: newName });
   };
@@ -224,11 +219,10 @@ export default function Sidebar() {
         </div>
       </div>
 
-      {/* ──── PROJECT LIST VIEW ──── */}
+      {/* Project / File views */}
       <AnimatePresence mode="wait">
         {view === 'projects' && (
           <motion.div key="projects" initial={{ opacity: 0, x: -16 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -16 }} transition={{ duration: 0.15 }} className="flex-1 overflow-y-auto flex flex-col">
-            {/* Header */}
             <div className="flex items-center justify-between px-3 py-2 shrink-0">
               <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Projeler</span>
               <div className="flex gap-1">
@@ -237,22 +231,6 @@ export default function Sidebar() {
               </div>
             </div>
 
-            {showNewProject && (
-              <div className="px-2 mb-2">
-                <input
-                  autoFocus
-                  value={newProjectName}
-                  onChange={e => setNewProjectName(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && newProjectName.trim()) { createProject(newProjectName.trim()); setNewProjectName(''); setShowNewProject(false); }
-                    if (e.key === 'Escape') { setShowNewProject(false); setNewProjectName(''); }
-                  }}
-                  placeholder="Proje adı... (Enter)"
-                  className="w-full px-3 py-2 text-xs bg-muted border border-primary rounded-lg outline-none text-foreground placeholder:text-muted-foreground"
-                />
-              </div>
-            )}
-
             {renamingProject && (
               <div className="px-2 mb-2">
                 <input
@@ -260,7 +238,7 @@ export default function Sidebar() {
                   value={renamingProject.name}
                   onChange={e => setRenamingProject(p => p ? { ...p, name: e.target.value } : null)}
                   onKeyDown={e => {
-                    if (e.key === 'Enter' && renamingProject.name.trim()) { renameProject(renamingProject.id, renamingProject.name.trim()); setRenamingProject(null); }
+                    if (e.key === 'Enter' && renamingProject.name.trim()) { renameProjectLocal(renamingProject.id, renamingProject.name.trim()); setRenamingProject(null); }
                     if (e.key === 'Escape') setRenamingProject(null);
                   }}
                   className="w-full px-3 py-2 text-xs bg-muted border border-primary rounded-lg outline-none text-foreground"
@@ -270,9 +248,12 @@ export default function Sidebar() {
 
             <div className="flex-1 overflow-y-auto py-1">
               {projects.length === 0 && (
-                <div className="px-3 py-6 text-center">
-                  <p className="text-xs text-muted-foreground">Henüz proje yok.</p>
-                  <button onClick={() => setShowNewProject(true)} className="mt-2 text-xs text-primary hover:underline">Yeni proje oluştur</button>
+                <div className="px-3 py-8 text-center">
+                  <div className="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center mx-auto mb-3">
+                    <FolderPlus size={20} className="text-muted-foreground" />
+                  </div>
+                  <p className="text-xs text-muted-foreground mb-2">Henüz proje yok.</p>
+                  <button onClick={() => setShowNewProject(true)} className="text-xs text-primary hover:underline">Yeni proje oluştur</button>
                 </div>
               )}
               {projects.map(p => (
@@ -289,10 +270,8 @@ export default function Sidebar() {
           </motion.div>
         )}
 
-        {/* ──── FILE TREE VIEW ──── */}
         {view === 'files' && activeProject && (
           <motion.div key="files" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 16 }} transition={{ duration: 0.15 }} className="flex-1 overflow-y-auto flex flex-col">
-            {/* Back + project name */}
             <div className="flex items-center gap-2 px-2 py-2 border-b border-sidebar-border shrink-0">
               <button onClick={() => setView('projects')} className="p-1 rounded hover:bg-white/10 text-muted-foreground hover:text-foreground transition-colors shrink-0">
                 <ArrowLeft size={13} />
@@ -311,7 +290,6 @@ export default function Sidebar() {
               ><FolderPlus size={11} /></button>
             </div>
 
-            {/* New file input */}
             {showNewFile && showNewFile.projectId === activeProject.id && !showNewFile.parentId && (
               <div className="px-2 py-1.5 border-b border-sidebar-border">
                 <input
@@ -328,8 +306,13 @@ export default function Sidebar() {
               </div>
             )}
 
-            {/* File tree */}
             <div className="flex-1 overflow-y-auto py-1">
+              {activeProject.files.length === 0 && (
+                <div className="px-3 py-6 text-center">
+                  <p className="text-xs text-muted-foreground mb-2">Proje boş.</p>
+                  <button onClick={() => setShowNewFile({ projectId: activeProject.id, parentId: null, type: 'file' })} className="text-xs text-primary hover:underline">Dosya ekle</button>
+                </div>
+              )}
               {activeProject.files.map(file =>
                 renaming?.fileId === file.id ? (
                   <div key={file.id} className="px-2 mb-1">
@@ -373,6 +356,13 @@ export default function Sidebar() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* New Project Modal */}
+      <NewProjectModal
+        open={showNewProject}
+        onClose={() => setShowNewProject(false)}
+        onCreated={handleProjectCreated}
+      />
     </div>
   );
 }
