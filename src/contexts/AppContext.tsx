@@ -16,6 +16,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   editorFontSize: 14,
   apiKeys: [],
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
+  activeKeyId: null,
 };
 
 interface GlowingFile { [fileId: string]: boolean }
@@ -98,6 +99,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           editorFontSize: savedSettings?.editorFontSize || 14,
           apiKeys: savedSettings?.apiKeys || [],
           systemPrompt: savedSettings?.systemPrompt || DEFAULT_SYSTEM_PROMPT,
+          activeKeyId: savedSettings?.activeKeyId ?? null,
         };
         setSettingsState(merged);
         setUserState(savedUser);

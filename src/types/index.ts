@@ -36,7 +36,7 @@ export interface PuterAIModel {
   color: string;
 }
 
-export type ApiProvider = 'anthropic' | 'google' | 'openai' | 'perplexity' | 'vercel';
+export type ApiProvider = 'anthropic' | 'google' | 'openai' | 'perplexity' | 'vercel' | 'mistral' | 'deepseek';
 
 export interface ApiKeyEntry {
   id: string;
@@ -72,4 +72,5 @@ export interface AppSettings {
   editorFontSize: number;
   apiKeys: ApiKeyEntry[];
   systemPrompt: string;
+  activeKeyId: string | null;
 }

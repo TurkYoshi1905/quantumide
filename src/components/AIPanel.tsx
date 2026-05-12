@@ -3,11 +3,11 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Send, Bot, User, Wand2, Loader2, ChevronDown,
   Code2, Bug, Zap, Sparkles, Trash2, Settings,
-  Check, FileEdit, FilePlus2, AlertCircle
+  Check, FileEdit, FilePlus2, AlertCircle, Key, ChevronRight
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { useApp } from "@/contexts/AppContext";
-import { callPuterAI, ALL_MODELS, getModelById, parseFilesFromAIResponse } from "@/lib/ai";
+import { callPuterAI, ALL_MODELS, getModelById, parseFilesFromAIResponse, getProviderForModel } from "@/lib/ai";
 import type { ChatMessage } from "@/types";
 import VibeCodingModal from "./VibeCodingModal";
 
@@ -85,13 +85,14 @@ function MessageContent({ content }: { content: string }) {
 }
 
 const PROVIDER_COLORS: Record<string, string> = {
-  openai: 'text-green-400',
-  anthropic: 'text-orange-400',
-  google: 'text-blue-400',
-  mistral: 'text-purple-400',
-  deepseek: 'text-cyan-400',
-  meta: 'text-pink-400',
-  perplexity: 'text-yellow-400',
+  openai: 'text-green-400', anthropic: 'text-orange-400',
+  google: 'text-blue-400', mistral: 'text-purple-400',
+  deepseek: 'text-cyan-400', meta: 'text-pink-400', perplexity: 'text-yellow-400',
+};
+
+const PROVIDER_LABELS: Record<string, string> = {
+  openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google',
+  mistral: 'Mistral', deepseek: 'DeepSeek', meta: 'Meta', perplexity: 'Perplexity',
 };
 
 export default function AIPanel() {
@@ -102,6 +103,7 @@ export default function AIPanel() {
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const [showKeyDropdown, setShowKeyDropdown] = useState(false);
   const [modelSearch, setModelSearch] = useState('');
   const [showVibeCoding, setShowVibeCoding] = useState(false);
   const [fileSteps, setFileSteps] = useState<FileStep[]>([]);
@@ -112,9 +114,42 @@ export default function AIPanel() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping, fileSteps]);
 
+  // ── Model display info ────────────────────────────────────────────────────
   const activeModelInfo = ALL_MODELS.find(m => m.id === settings.ai.activeModel || m.puterModel === settings.ai.activeModel);
   const activeModelFallback = getModelById(settings.ai.activeModel);
+  const displayName = activeModelInfo?.label || activeModelFallback.label;
+  const displayProvider = activeModelInfo?.provider || activeModelFallback.provider.toLowerCase();
+  const displayColor = PROVIDER_COLORS[displayProvider] || 'text-primary';
 
+  // ── Key selection logic ───────────────────────────────────────────────────
+  const modelProvider = getProviderForModel(settings.ai.activeModel);
+  const aiProviders = ['openai', 'anthropic', 'google', 'mistral', 'deepseek', 'perplexity'];
+  const matchingKeys = settings.apiKeys.filter(k => aiProviders.includes(k.provider));
+
+  const activeKeyEntry = settings.activeKeyId
+    ? matchingKeys.find(k => k.id === settings.activeKeyId) || null
+    : matchingKeys.find(k => k.provider === modelProvider) || null;
+
+  const isPuterConnected = settings.ai.puterConnected;
+  const hasMatchingKey = !!activeKeyEntry;
+
+  const getActiveSourceLabel = () => {
+    if (hasMatchingKey && activeKeyEntry) {
+      const label = activeKeyEntry.label || PROVIDER_LABELS[activeKeyEntry.provider] || activeKeyEntry.provider;
+      const masked = activeKeyEntry.key.slice(0, 8) + '...';
+      return `${label} (${masked})`;
+    }
+    if (isPuterConnected) return 'Puter (ücretsiz)';
+    return 'Demo modu';
+  };
+
+  const getActiveSourceColor = () => {
+    if (hasMatchingKey) return 'text-accent';
+    if (isPuterConnected) return 'text-primary';
+    return 'text-muted-foreground';
+  };
+
+  // ── Active file content ───────────────────────────────────────────────────
   const getActiveFileContent = () => {
     if (!activeTab) return '';
     const project = projects.find(p => p.id === activeTab.projectId);
@@ -129,6 +164,7 @@ export default function AIPanel() {
     return search(project.files);
   };
 
+  // ── File step animation ───────────────────────────────────────────────────
   const applyFilesStepByStep = async (parsed: ReturnType<typeof parseFilesFromAIResponse>) => {
     if (!parsed.length) return;
     const target = activeProject || projects[0];
@@ -178,6 +214,7 @@ export default function AIPanel() {
     setTimeout(() => setFileSteps([]), 4000);
   };
 
+  // ── Send message ──────────────────────────────────────────────────────────
   const sendMessage = async (text?: string) => {
     const msgText = text || input.trim();
     if (!msgText || isTyping) return;
@@ -188,15 +225,19 @@ export default function AIPanel() {
     setIsTyping(true);
     setFileSteps([]);
 
-    const systemPrompt = settings.systemPrompt;
     const conversationHistory = [
-      { role: 'system', content: systemPrompt },
+      { role: 'system', content: settings.systemPrompt },
       ...messages.filter(m => !m.isTyping).slice(-8).map(m => ({ role: m.role, content: m.content })),
       { role: 'user', content: msgText }
     ];
 
     try {
-      const response = await callPuterAI(settings.ai.activeModel, conversationHistory, settings.apiKeys);
+      const response = await callPuterAI(
+        settings.ai.activeModel,
+        conversationHistory,
+        matchingKeys,
+        settings.activeKeyId,
+      );
       const parsed = parseFilesFromAIResponse(response);
       const displayContent = parsed.length > 0
         ? response.replace(/```[\s\S]*?```/g, '').replace(/\n{3,}/g, '\n\n').trim()
@@ -226,32 +267,32 @@ export default function AIPanel() {
     m.provider.toLowerCase().includes(modelSearch.toLowerCase())
   );
 
-  const displayName = activeModelInfo?.label || activeModelFallback.label;
-  const displayProvider = activeModelInfo?.provider || activeModelFallback.provider;
-  const displayColor = PROVIDER_COLORS[activeModelInfo?.provider || ''] || 'text-primary';
-
   return (
     <div className="h-full flex flex-col bg-card border-l border-border overflow-hidden">
       {/* Header */}
-      <div className="p-3 border-b border-border shrink-0">
-        <div className="flex items-center gap-2 mb-2">
+      <div className="p-3 border-b border-border shrink-0 space-y-2">
+        <div className="flex items-center gap-2">
           <div className="w-6 h-6 rounded-md bg-primary/20 flex items-center justify-center">
             <Bot size={14} className="text-primary" />
           </div>
           <span className="text-xs font-semibold text-foreground">AI Asistan</span>
           <div className="flex-1" />
-          <button onClick={() => setLocation('/settings')} className="p-1 rounded hover:bg-white/10 text-muted-foreground hover:text-foreground transition-colors" title="Ayarlar"><Settings size={12} /></button>
-          <button onClick={clearMessages} className="p-1 rounded hover:bg-white/10 text-muted-foreground hover:text-foreground transition-colors" title="Temizle"><Trash2 size={12} /></button>
+          <button onClick={() => setLocation('/settings')} className="p-1 rounded hover:bg-white/10 text-muted-foreground hover:text-foreground transition-colors" title="Ayarlar">
+            <Settings size={12} />
+          </button>
+          <button onClick={clearMessages} className="p-1 rounded hover:bg-white/10 text-muted-foreground hover:text-foreground transition-colors" title="Temizle">
+            <Trash2 size={12} />
+          </button>
         </div>
 
         {/* Model Selector */}
         <div className="relative">
           <button
-            onClick={() => { setShowModelDropdown(o => !o); setModelSearch(''); }}
+            onClick={() => { setShowModelDropdown(o => !o); setModelSearch(''); setShowKeyDropdown(false); }}
             className="w-full flex items-center gap-2 px-2 py-1.5 bg-muted rounded-lg text-xs hover:bg-muted/80 transition-colors border border-border"
           >
             <Sparkles size={11} className={displayColor} />
-            <span className={`flex-1 text-left ${displayColor} truncate`}>{displayName}</span>
+            <span className={`flex-1 text-left ${displayColor} truncate font-mono`}>{settings.ai.activeModel}</span>
             <span className="text-muted-foreground text-xs shrink-0 capitalize">{displayProvider}</span>
             <ChevronDown size={11} className="text-muted-foreground shrink-0" />
           </button>
@@ -269,21 +310,21 @@ export default function AIPanel() {
                       autoFocus
                       value={modelSearch}
                       onChange={e => setModelSearch(e.target.value)}
-                      placeholder="Model ara... (anthropic/claude)"
+                      placeholder="Model ara... (openai/gpt-4o)"
                       className="w-full px-2 py-1.5 bg-muted rounded text-xs text-foreground placeholder:text-muted-foreground outline-none border border-border focus:border-primary"
                     />
                   </div>
-                  <div className="max-h-56 overflow-y-auto py-1">
+                  <div className="max-h-52 overflow-y-auto py-1">
                     {filteredModels.map(opt => (
                       <button
                         key={opt.id}
-                        onClick={() => { updateSettings({ ...settings, ai: { ...settings.ai, activeModel: opt.id } }); setShowModelDropdown(false); }}
+                        onClick={() => { updateSettings({ ...settings, ai: { ...settings.ai, activeModel: opt.id }, activeKeyId: null }); setShowModelDropdown(false); }}
                         className={`w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 transition-colors ${opt.id === settings.ai.activeModel ? 'bg-primary/10' : ''}`}
                       >
                         <Sparkles size={11} className={PROVIDER_COLORS[opt.provider] || 'text-primary'} />
                         <span className="flex-1 text-left text-foreground truncate font-mono">{opt.id}</span>
                         <span className="text-muted-foreground shrink-0">{opt.context}</span>
-                        {opt.id === settings.ai.activeModel && <span className="ml-1 text-primary shrink-0">Aktif</span>}
+                        {opt.id === settings.ai.activeModel && <Check size={11} className="text-primary shrink-0" />}
                       </button>
                     ))}
                   </div>
@@ -293,15 +334,117 @@ export default function AIPanel() {
           </AnimatePresence>
         </div>
 
-        {/* Connection status */}
-        {!settings.ai.puterConnected && settings.apiKeys.length === 0 ? (
-          <button onClick={() => setLocation('/settings')} className="mt-1.5 w-full flex items-center gap-1.5 px-2 py-1 rounded-md bg-primary/10 border border-primary/20 text-xs text-primary hover:bg-primary/20 transition-colors">
+        {/* Key Selector */}
+        <div className="relative">
+          <button
+            onClick={() => { setShowKeyDropdown(o => !o); setShowModelDropdown(false); }}
+            className="w-full flex items-center gap-2 px-2 py-1.5 bg-muted/50 rounded-lg text-xs hover:bg-muted/80 transition-colors border border-border/60"
+          >
+            <Key size={10} className={getActiveSourceColor()} />
+            <span className={`flex-1 text-left truncate ${getActiveSourceColor()}`}>
+              {getActiveSourceLabel()}
+            </span>
+            <ChevronDown size={10} className="text-muted-foreground shrink-0" />
+          </button>
+
+          <AnimatePresence>
+            {showKeyDropdown && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowKeyDropdown(false)} />
+                <motion.div
+                  initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}
+                  className="absolute top-full left-0 right-0 mt-1 bg-popover border border-popover-border rounded-lg shadow-xl z-50 overflow-hidden py-1"
+                >
+                  {/* Puter option */}
+                  {isPuterConnected && (
+                    <button
+                      onClick={() => { updateSettings({ ...settings, activeKeyId: null }); setShowKeyDropdown(false); }}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 transition-colors ${!settings.activeKeyId ? 'bg-primary/10' : ''}`}
+                    >
+                      <Zap size={11} className="text-primary shrink-0" />
+                      <div className="flex-1 text-left">
+                        <div className="text-foreground font-medium">Puter</div>
+                        <div className="text-muted-foreground text-xs">Ücretsiz — Otomatik model eşleme</div>
+                      </div>
+                      {!settings.activeKeyId && <Check size={11} className="text-primary shrink-0" />}
+                    </button>
+                  )}
+
+                  {/* API keys */}
+                  {matchingKeys.length > 0 && (
+                    <>
+                      {isPuterConnected && <div className="border-t border-border my-1" />}
+                      <div className="px-3 py-1">
+                        <span className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">API Anahtarları</span>
+                      </div>
+                      {matchingKeys.map(key => {
+                        const isSelected = settings.activeKeyId === key.id ||
+                          (!settings.activeKeyId && key.provider === modelProvider && !isPuterConnected);
+                        const providerColor = PROVIDER_COLORS[key.provider] || 'text-muted-foreground';
+                        return (
+                          <button
+                            key={key.id}
+                            onClick={() => { updateSettings({ ...settings, activeKeyId: key.id }); setShowKeyDropdown(false); }}
+                            className={`w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/5 transition-colors ${isSelected ? 'bg-accent/10' : ''}`}
+                          >
+                            <Key size={11} className={`${providerColor} shrink-0`} />
+                            <div className="flex-1 text-left min-w-0">
+                              <div className={`font-medium truncate ${providerColor}`}>
+                                {key.label || PROVIDER_LABELS[key.provider] || key.provider}
+                              </div>
+                              <div className="text-muted-foreground font-mono truncate">{key.key.slice(0, 12)}...</div>
+                            </div>
+                            {isSelected && <Check size={11} className="text-accent shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
+
+                  {/* No keys, no puter */}
+                  {matchingKeys.length === 0 && !isPuterConnected && (
+                    <div className="px-3 py-3 text-center">
+                      <p className="text-xs text-muted-foreground mb-2">Henüz AI anahtarı yok.</p>
+                      <button
+                        onClick={() => { setShowKeyDropdown(false); setLocation('/settings'); }}
+                        className="flex items-center gap-1 text-xs text-primary hover:underline mx-auto"
+                      >
+                        Ayarlar'da ekle <ChevronRight size={11} />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Demo mode indicator */}
+                  {matchingKeys.length === 0 && !isPuterConnected && (
+                    <div className="px-3 py-2 border-t border-border">
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-muted-foreground/40" />
+                        <span className="text-xs text-muted-foreground">Demo modu aktif</span>
+                      </div>
+                    </div>
+                  )}
+                </motion.div>
+              </>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* Status bar */}
+        {!isPuterConnected && matchingKeys.length === 0 ? (
+          <button
+            onClick={() => setLocation('/settings')}
+            className="w-full flex items-center gap-1.5 px-2 py-1 rounded-md bg-primary/10 border border-primary/20 text-xs text-primary hover:bg-primary/20 transition-colors"
+          >
             <Code2 size={10} /><span>API anahtarı ekle veya Puter bağla</span>
           </button>
         ) : (
-          <div className="mt-1.5 flex items-center gap-1.5 px-2 py-1 rounded-md bg-accent/10 text-xs text-accent">
+          <div className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs ${hasMatchingKey ? 'bg-accent/10 text-accent' : 'bg-primary/10 text-primary'}`}>
             <Zap size={10} />
-            <span>{settings.ai.puterConnected ? 'Puter bağlı — sınırsız kullanım' : `${settings.apiKeys.length} API anahtarı aktif`}</span>
+            <span className="truncate">
+              {hasMatchingKey
+                ? `${PROVIDER_LABELS[activeKeyEntry!.provider] || activeKeyEntry!.provider} API ile çalışıyor`
+                : 'Puter — sınırsız kullanım aktif'}
+            </span>
           </div>
         )}
       </div>

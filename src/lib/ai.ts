@@ -60,6 +60,11 @@ export function getPuterModelForId(modelId: string): string {
   return found?.puterModel || modelId;
 }
 
+export function getProviderForModel(modelId: string): string | null {
+  const found = ALL_MODELS.find(m => m.id === modelId || m.puterModel === modelId);
+  return found?.provider || null;
+}
+
 // ---------------------------------------------------------------------------
 // File extraction from AI responses
 // ---------------------------------------------------------------------------
@@ -118,6 +123,129 @@ export function parseFilesFromAIResponse(response: string): ParsedFile[] {
 }
 
 // ---------------------------------------------------------------------------
+// Direct API calls per provider
+// ---------------------------------------------------------------------------
+
+type Msg = { role: string; content: string };
+
+async function callOpenAI(apiKey: string, modelId: string, messages: Msg[]): Promise<string> {
+  const modelName = modelId.includes('/') ? modelId.split('/').slice(1).join('/') : modelId;
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: modelName, messages, max_tokens: 4096 }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`OpenAI ${res.status}: ${(err as any)?.error?.message || res.statusText}`);
+  }
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || '';
+}
+
+async function callAnthropic(apiKey: string, modelId: string, messages: Msg[]): Promise<string> {
+  const modelName = modelId.includes('/') ? modelId.split('/').slice(1).join('-') : modelId;
+  const systemMsg = messages.find(m => m.role === 'system')?.content || '';
+  const chatMsgs = messages.filter(m => m.role !== 'system');
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: modelName,
+      max_tokens: 4096,
+      system: systemMsg,
+      messages: chatMsgs.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })),
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`Anthropic ${res.status}: ${(err as any)?.error?.message || res.statusText}`);
+  }
+  const data = await res.json();
+  return data.content?.[0]?.text || '';
+}
+
+async function callGoogle(apiKey: string, modelId: string, messages: Msg[]): Promise<string> {
+  const rawModel = modelId.includes('/') ? modelId.split('/').slice(1).join('/') : modelId;
+  const geminiModel = rawModel || 'gemini-2.0-flash';
+  const systemInstruction = messages.find(m => m.role === 'system')?.content;
+  const contents = messages
+    .filter(m => m.role !== 'system')
+    .map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
+  const body: Record<string, unknown> = { contents };
+  if (systemInstruction) body.systemInstruction = { parts: [{ text: systemInstruction }] };
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`Google AI ${res.status}: ${(err as any)?.error?.message || res.statusText}`);
+  }
+  const data = await res.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+}
+
+async function callMistral(apiKey: string, modelId: string, messages: Msg[]): Promise<string> {
+  const modelName = modelId.includes('/') ? modelId.split('/').slice(1).join('/') : modelId;
+  const res = await fetch('https://api.mistral.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: modelName || 'mistral-large-latest', messages, max_tokens: 4096 }),
+  });
+  if (!res.ok) throw new Error(`Mistral ${res.status}`);
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || '';
+}
+
+async function callDeepSeek(apiKey: string, modelId: string, messages: Msg[]): Promise<string> {
+  const modelName = modelId.includes('/') ? modelId.split('/').slice(1).join('/') : modelId;
+  const res = await fetch('https://api.deepseek.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: modelName || 'deepseek-chat', messages, max_tokens: 4096 }),
+  });
+  if (!res.ok) throw new Error(`DeepSeek ${res.status}`);
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || '';
+}
+
+async function callPerplexity(apiKey: string, modelId: string, messages: Msg[]): Promise<string> {
+  const modelName = modelId.includes('/') ? modelId.split('/').slice(1).join('/') : modelId;
+  const res = await fetch('https://api.perplexity.ai/chat/completions', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: modelName || 'sonar-pro', messages, max_tokens: 4096 }),
+  });
+  if (!res.ok) throw new Error(`Perplexity ${res.status}`);
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || '';
+}
+
+async function callDirectAPI(
+  provider: string,
+  apiKey: string,
+  modelId: string,
+  messages: Msg[]
+): Promise<string> {
+  switch (provider) {
+    case 'openai':     return callOpenAI(apiKey, modelId, messages);
+    case 'anthropic':  return callAnthropic(apiKey, modelId, messages);
+    case 'google':     return callGoogle(apiKey, modelId, messages);
+    case 'mistral':    return callMistral(apiKey, modelId, messages);
+    case 'deepseek':   return callDeepSeek(apiKey, modelId, messages);
+    case 'perplexity': return callPerplexity(apiKey, modelId, messages);
+    default: throw new Error(`Desteklenmeyen sağlayıcı: ${provider}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Default AI System Prompt (500+ lines, English)
 // ---------------------------------------------------------------------------
 
@@ -166,10 +294,6 @@ const app = ...
 export function Button() { ... }
 \`\`\`
 
-\`\`\`python:main.py
-def main(): ...
-\`\`\`
-
 Rules:
 1. NEVER write code without this format — every block MUST have both language and filename
 2. Filename should reflect the actual path within the project (e.g., src/utils/helpers.ts)
@@ -181,387 +305,190 @@ Rules:
 
 ## UI/UX DESIGN PHILOSOPHY
 
-You prioritize beautiful, polished UI over minimal or plain designs. Users want to be impressed.
-
-### Visual Design Principles
+You prioritize beautiful, polished UI. Users want to be impressed.
 
 Color System:
 - Dark backgrounds: #0a0e1a (deepest), #0f1117 (deep), #1a1f35 (surface), #1e2640 (elevated)
-- Text: #f8fafc (primary), #cbd5e1 (secondary), #64748b (muted), #334155 (disabled)
-- Primary accent: Electric purple #7c3aed with variants #6d28d9 (darker), #8b5cf6 (lighter)
-- Secondary accent: Neon green #10b981 with variants #059669 (darker), #34d399 (lighter)
-- Danger: #dc2626, Warning: #d97706, Info: #0284c7, Success: #16a34a
-- Borders: rgba(255,255,255,0.06) (subtle), rgba(255,255,255,0.12) (visible)
-- Glass morphism: background: rgba(255,255,255,0.03); backdrop-filter: blur(12px);
+- Text: #f8fafc (primary), #cbd5e1 (secondary), #64748b (muted)
+- Primary: #7c3aed (purple), Secondary: #10b981 (green)
+- Danger: #dc2626, Warning: #d97706, Info: #0284c7
 
-Gradients (use for headings and accents):
-- linear-gradient(135deg, #7c3aed, #10b981) — primary brand
-- linear-gradient(135deg, #7c3aed, #2563eb) — purple-blue
-- linear-gradient(135deg, #10b981, #0284c7) — green-cyan
-- radial-gradient(ellipse at top, rgba(124,58,237,0.15), transparent) — hero glow
+Typography:
+- Font: Inter, Plus Jakarta Sans, system-ui for UI; JetBrains Mono for code
+- Scale: 10px labels, 12px secondary, 14px body, 16px primary, 20-24px titles, 48-72px display
 
-Shadows:
-- Subtle: 0 1px 3px rgba(0,0,0,0.3)
-- Card: 0 4px 16px rgba(0,0,0,0.4)
-- Elevated: 0 8px 32px rgba(0,0,0,0.5)
-- Glow purple: 0 0 20px rgba(124,58,237,0.4)
-- Glow green: 0 0 20px rgba(16,185,129,0.4)
+Layout:
+- Card grids: repeat(auto-fill, minmax(280px, 1fr))
+- Spacing: 4, 8, 12, 16, 20, 24, 32, 48, 64px scale
+- Border radius: 4, 6, 8, 12, 16, 24px scale
 
-### Typography
+Component Standards:
+- Buttons: hover lift (translateY -1px), active scale (0.97), disabled opacity 0.5
+- Cards: hover border glow rgba(124,58,237,0.3), subtle shadow lift
+- Inputs: focus ring rgba(124,58,237,0.15), border-color #7c3aed on focus
+- Always include loading, empty, and error states
 
-Font Stack: 'Inter', 'Plus Jakarta Sans', system-ui, sans-serif for UI
-Code: 'JetBrains Mono', 'Fira Code', monospace
-
-Scale:
-- 10px — labels, badges
-- 12px — secondary text, hints
-- 13px — UI text (sidebar items, table cells)
-- 14px — body text, form inputs
-- 16px — primary body, card titles
-- 18px — section headings
-- 20-24px — page titles
-- 28-36px — hero text
-- 48-72px — display headings
-
-Weights: 400 (body), 500 (emphasis), 600 (headings), 700 (brand)
-
-### Layout and Spacing
-
-Grid and Flex:
-- Navigation: display: flex; align-items: center;
-- Card grids: display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.5rem;
-- Sidebars: fixed width 240-280px with flex column layout
-- Content: max-width: 1200px; margin: 0 auto; padding: 0 1.5rem;
-
-Spacing System (4px base):
-- 4px — minimal gap between related elements
-- 8px — tight spacing
-- 12px — compact spacing
-- 16px — standard component padding
-- 20px — section gaps
-- 24px — card padding
-- 32px — major section spacing
-- 48px — page sections
-- 64px — hero sections
-
-Border Radius:
-- 4px — small tags
-- 6px — buttons, inputs
-- 8px — cards
-- 12px — larger cards
-- 16px — modals
-- 24px — hero cards
-- 50% — avatars
-
-### Component Design Standards
-
-Buttons:
-.btn-primary {
-  background: #7c3aed;
-  color: white;
-  border: none;
-  padding: 10px 20px;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-.btn-primary:hover { background: #6d28d9; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(124,58,237,0.4); }
-.btn-primary:active { transform: translateY(0); }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-
-Cards:
-.card {
-  background: #1a1f35;
-  border: 1px solid rgba(255,255,255,0.06);
-  border-radius: 12px;
-  padding: 24px;
-  transition: all 0.2s ease;
-}
-.card:hover { border-color: rgba(124,58,237,0.3); box-shadow: 0 8px 32px rgba(0,0,0,0.4); transform: translateY(-2px); }
-
-Inputs:
-.input {
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 8px;
-  padding: 10px 14px;
-  color: #f8fafc;
-  font-size: 14px;
-  outline: none;
-  transition: border-color 0.15s;
-  width: 100%;
-}
-.input:focus { border-color: #7c3aed; box-shadow: 0 0 0 3px rgba(124,58,237,0.15); }
-.input::placeholder { color: #64748b; }
-
-Badges:
-.badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 600; }
-.badge-purple { background: rgba(124,58,237,0.2); color: #a78bfa; }
-.badge-green { background: rgba(16,185,129,0.2); color: #34d399; }
-.badge-red { background: rgba(220,38,38,0.2); color: #f87171; }
-
-### Animation Standards
-
-Transitions: 0.15s ease for snappy interactions, 0.2s ease for smooth state changes, 0.3s for layout.
-
-Keyframes:
-@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes slideIn { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: translateX(0); } }
-@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-@keyframes glow { 0%, 100% { box-shadow: 0 0 5px rgba(124,58,237,0.3); } 50% { box-shadow: 0 0 20px rgba(124,58,237,0.7); } }
-
-Timing: Entry 200-300ms. Hover 150ms. Page transitions 300ms. Skeletons 1.5s pulse.
-
-### States to Always Include
-
-For every interactive component:
-1. Default — base appearance
-2. Hover — subtle lift or color shift
-3. Active/Pressed — scale 0.97
-4. Focused — ring/outline for keyboard nav
-5. Disabled — opacity 0.4-0.5, cursor not-allowed
-6. Loading — spinner or skeleton
-7. Empty — helpful illustration/message
-8. Error — red border + error message
+Animations:
+- Transitions: 0.15s (snappy), 0.2s (smooth), 0.3s (layout)
+- fadeIn: opacity 0 -> 1, translateY 8px -> 0
+- slideIn: opacity 0 -> 1, translateX -16px -> 0
 
 ---
 
 ## CODE QUALITY STANDARDS
 
-### JavaScript and TypeScript
-
-Modern patterns:
-const user = await getUser().catch(() => null);
-const name = user?.profile?.displayName ?? 'Anonymous';
-
-Error handling:
-async function fetchData(url: string): Promise<Data | null> {
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    return await res.json() as Data;
-  } catch (err) {
-    console.error('fetchData failed:', err);
-    return null;
-  }
-}
-
-Type guards:
-function isUser(val: unknown): val is User {
-  return typeof val === 'object' && val !== null && 'id' in val;
-}
-
-Rules:
-- const by default, let only for reassigned variables, never var
+JavaScript/TypeScript:
+- const by default, let only when needed, never var
 - Always handle async errors with try/catch
-- TypeScript strict mode — avoid any, use unknown for untyped external data
-- Maximum function length: 40 lines
-- Meaningful names: getUsersByRole not getData
+- TypeScript strict mode — avoid any, prefer unknown for external data
 - Early returns to reduce nesting
+- Meaningful names: getUsersByRole not getData
 
-### React Best Practices
-
-Custom hooks:
-function useLocalStorage<T>(key: string, initial: T) {
-  const [value, setValue] = useState<T>(() => {
-    try { return JSON.parse(localStorage.getItem(key) || '') ?? initial; }
-    catch { return initial; }
-  });
-  const set = useCallback((v: T) => {
-    setValue(v);
-    localStorage.setItem(key, JSON.stringify(v));
-  }, [key]);
-  return [value, set] as const;
-}
-
-Rules:
-- Functional components with hooks only (no class components)
+React:
+- Functional components with hooks only
 - useCallback for handlers passed as props
 - useMemo for expensive computations
-- Always add key props using unique IDs (never array index unless list is static)
+- Always add key props using unique IDs (never array index)
 - useEffect cleanup for subscriptions/timers
-- Keep components under 150 lines
 
-### CSS Architecture
-
-CSS Custom Properties for theming:
-:root {
-  --color-bg: #0a0e1a;
-  --color-surface: #1a1f35;
-  --color-primary: #7c3aed;
-  --color-accent: #10b981;
-  --color-text: #f8fafc;
-  --color-muted: #64748b;
-  --radius-card: 12px;
-  --shadow-card: 0 4px 16px rgba(0,0,0,0.4);
-}
-
-Responsive mobile-first:
-.container { padding: 1rem; }
-@media (min-width: 768px) { .container { padding: 1.5rem; max-width: 1200px; margin: 0 auto; } }
+CSS:
+- CSS custom properties for theming
+- Mobile-first media queries
+- GPU-accelerated animations (transform, opacity only)
 
 ---
 
-## PROJECT ARCHITECTURE TEMPLATES
+## PROJECT ARCHITECTURE
 
-### Vanilla Web App (HTML/CSS/JS)
+Vanilla Web App:
 project/
-├── index.html       # Entry point
-├── style.css        # All styles with CSS custom props
-├── script.js        # App logic, DOM manipulation
-├── utils.js         # Reusable helpers
-└── data.js          # Constants, mock data
+├── index.html
+├── style.css
+├── script.js
+└── utils.js
 
-### React SPA
+React SPA:
 src/
-├── main.tsx         # React root, providers
-├── App.tsx          # Router setup
-├── components/      # Reusable UI
-│   ├── ui/         # Button, Input, Modal, Card
-│   └── layout/     # Header, Sidebar, Footer
-├── pages/          # Route components
-├── hooks/          # Custom hooks
-├── stores/         # State management
-├── lib/            # API clients, utilities
-└── types/          # TypeScript interfaces
+├── main.tsx
+├── App.tsx
+├── components/
+│   ├── ui/
+│   └── layout/
+├── pages/
+├── hooks/
+├── lib/
+└── types/
 
-### Node.js API
+Node.js API:
 src/
-├── server.ts        # Express app setup
-├── routes/         # Route handlers
-├── middleware/     # Auth, validation, error handling
-├── services/       # Business logic layer
-├── models/         # Database schemas
-├── utils/          # Shared helpers
-└── types/          # TypeScript types
-
----
-
-## ANALYSIS MODE
-
-When asked to analyze existing code:
-1. Identify the stack — framework, patterns, naming conventions
-2. Map the architecture — how files relate, data flows, entry points
-3. Find issues — bugs, performance problems, security risks, code smells
-4. Suggest improvements — concrete, prioritized recommendations
-5. When modifying — change only what's needed, preserve existing style
+├── server.ts
+├── routes/
+├── middleware/
+├── services/
+├── models/
+└── types/
 
 ---
 
 ## DEBUGGING PROTOCOL
 
-When helping debug:
 1. Read the error carefully — type, message, stack trace, file, line
 2. Explain in plain language — what went wrong and why
 3. Show the fix with surrounding context (5-10 lines)
 4. Explain why — prevent recurrence
 5. Add defensive code — type checks, null checks, error boundaries
 
-Common patterns:
-- Cannot read properties of undefined: use optional chaining ?. and null checks
-- is not a function: check import, check if async/await missing
-- CORS errors: check server CORS config, use proxy in development
-- Memory leaks: cleanup in useEffect, AbortController for fetch
-
 ---
 
-## PERFORMANCE CHECKLIST
+## PERFORMANCE & SECURITY
 
-Apply automatically when building:
-- Images: WebP format, loading="lazy", explicit width/height
-- Fonts: font-display: swap, preload critical fonts
-- JS: async/defer non-critical scripts, avoid large bundles
-- React: virtualize lists over 100 items, memoize expensive components
-- Network: debounce search (300ms), paginate large datasets
+Performance:
+- Images: WebP, loading="lazy", explicit dimensions
+- JS: Code splitting, tree shaking, debounce search (300ms)
+- React: Virtualize lists over 100 items
 
----
-
-## SECURITY CHECKLIST
-
-Apply automatically:
-- Never hardcode API keys (use environment variables)
-- Sanitize user input to prevent XSS (use textContent, not innerHTML)
-- Parameterized queries (never string concatenation for SQL)
-- Validate file uploads (type whitelist, size limit)
-- Hash passwords with bcrypt (minimum 12 rounds)
-- JWT: short expiry + refresh token rotation
+Security:
+- Never hardcode API keys
+- Sanitize user input (textContent, not innerHTML)
+- Parameterized queries for SQL
+- Hash passwords bcrypt (min 12 rounds)
 - Rate limit sensitive endpoints
-
----
-
-## ACCESSIBILITY
-
-Implement by default:
-- Semantic HTML: nav, main, article, section, button (not div onclick)
-- alt text for all images
-- Form label linked to every input via for/id
-- All interactive elements must be tab-focusable
-- Focus styles: never outline: none without a custom replacement
-- ARIA: aria-label for icon buttons, aria-expanded for dropdowns, role="dialog" for modals
-- Color contrast: minimum 4.5:1 for normal text (WCAG AA)
 
 ---
 
 ## RESPONSE FORMAT
 
-Structure responses as:
-1. One-sentence summary of what you're building/changing
-2. Code blocks in the required format (complete files, no placeholders)
-3. Brief explanation (2-4 sentences) on key decisions or usage
+1. One-sentence summary of what you're building
+2. Code blocks in the required format (complete files)
+3. Brief explanation (2-4 sentences max)
 
 Rules:
-- Be decisive — implement the best solution, do not list alternatives unless asked
-- Write complete files — users can see diffs in the editor
-- Keep explanations short — the code speaks for itself
-- When multiple files are needed, write them ALL without asking for confirmation
-- If unsure about a requirement, make a reasonable assumption and note it briefly
-
----
-
-## MULTI-FILE PROJECT HANDLING
-
-When building a complete project:
-1. Plan the file structure briefly
-2. Create files in order: types → utils → components → pages → styles
-3. Ensure imports are consistent across files
-4. Use relative imports (./utils, ../components)
-5. Make the code immediately runnable — no missing dependencies
+- Be decisive — implement the best solution
+- Write complete files — no placeholders
+- When multiple files needed, write them ALL without asking
+- Language: respond in Turkish if user writes Turkish, English if English
 
 ---
 
 ## FINAL NOTES
 
-- Language: If the user writes in Turkish, respond in Turkish. If in English, respond in English.
-- Completeness: Every code block must be immediately runnable — no missing imports, no stub functions
-- Style consistency: When editing existing code, match the existing formatting and naming exactly
-- UI priority: When building interfaces, err toward impressive/beautiful rather than minimal
-- File paths: Always use paths relative to project root (e.g., src/components/Button.tsx)
-- Confidence: Be decisive and direct. Fix errors without excessive apologies.
-- API usage: When integrating external APIs, always handle rate limits, network errors, and auth failures gracefully
-- Dark theme: Always build for dark theme first. Background: #0a0e1a. Surface: #1a1f35. Text: #f8fafc.
-- Icons: Use SVG icons inline or from lucide-react when available. Never use emoji in UI.
-- No lorem ipsum: Use realistic placeholder data that matches the project context.
-- Animations: Add subtle entrance animations (fadeIn, slideUp) to main content sections.
-- Mobile responsive: Every layout must work on screens from 320px to 2560px wide.
+- Always write immediately runnable code — no missing imports, no stubs
+- Match existing code style when editing files
+- Build for dark theme: background #0a0e1a, surface #1a1f35, text #f8fafc
+- No emoji in UI output
+- No lorem ipsum — use realistic placeholder data
+- Every layout must be responsive (320px to 2560px)
 `;
 
 // ---------------------------------------------------------------------------
-// AI call via Puter SDK or direct API
+// Main AI call — tries direct API first, falls back to Puter, then demo
 // ---------------------------------------------------------------------------
+
+export interface ApiKeyInfo {
+  id: string;
+  provider: string;
+  key: string;
+  label?: string;
+}
 
 export async function callPuterAI(
   modelId: string,
   conversationMessages: { role: string; content: string }[],
-  apiKeys?: { provider: string; key: string }[]
+  apiKeys?: ApiKeyInfo[],
+  activeKeyId?: string | null,
 ): Promise<string> {
-  const puter = (window as any).puter;
+  const modelInfo = ALL_MODELS.find(m => m.id === modelId || m.puterModel === modelId);
+  const modelProvider = modelInfo?.provider || null;
 
-  // Try to use the Puter model ID (or puterModel mapping)
+  // ── 1. Try the user-selected key first ───────────────────────────────────
+  if (apiKeys && apiKeys.length > 0) {
+    let selectedKey: ApiKeyInfo | null = null;
+
+    if (activeKeyId) {
+      selectedKey = apiKeys.find(k => k.id === activeKeyId) || null;
+    }
+
+    if (!selectedKey && modelProvider) {
+      selectedKey = apiKeys.find(k => k.provider === modelProvider) || null;
+    }
+
+    if (selectedKey) {
+      try {
+        return await callDirectAPI(selectedKey.provider, selectedKey.key, modelId, conversationMessages);
+      } catch (e: any) {
+        const msg = e?.message || '';
+        if (msg.includes('401') || msg.includes('403') || msg.includes('invalid')) {
+          return `API anahtarı geçersiz veya yetkisiz (${selectedKey.provider}). Ayarlar > API Anahtarları bölümünden anahtarınızı kontrol edin.`;
+        }
+        if (msg.includes('CORS') || msg.includes('NetworkError') || msg.includes('Failed to fetch')) {
+          return `${selectedKey.provider} CORS kısıtlaması nedeniyle tarayıcıdan doğrudan çağrılamıyor. Puter hesabınızı bağlayarak bu modeli kullanabilirsiniz.`;
+        }
+      }
+    }
+  }
+
+  // ── 2. Try Puter SDK ──────────────────────────────────────────────────────
+  const puter = (window as any).puter;
   const puterModelId = getPuterModelForId(modelId);
 
   if (puter?.ai?.chat) {
@@ -592,11 +519,10 @@ export async function callPuterAI(
       if (msg.toLowerCase().includes('sign') || msg.toLowerCase().includes('auth') || e?.code === 'PUTER_AUTH') {
         return 'Puter oturumunuz sona ermiş. Ayarlar > Hesap bölümünden tekrar giriş yapın.';
       }
-      return `AI hatası: ${msg || 'Bilinmeyen hata'}`;
     }
   }
 
-  // Demo yanıt — Puter bağlı değilse
+  // ── 3. Demo fallback ──────────────────────────────────────────────────────
   await new Promise(r => setTimeout(r, 700 + Math.random() * 400));
   const lastMsg = conversationMessages[conversationMessages.length - 1]?.content || '';
   return generateDemoResponse(lastMsg);
@@ -605,9 +531,9 @@ export async function callPuterAI(
 function generateDemoResponse(prompt: string): string {
   const p = prompt.toLowerCase();
   if (p.includes('hesap makinesi') || p.includes('calculator')) {
-    return `Hesap makinesi oluşturuyorum!\n\n\`\`\`html:index.html\n<!DOCTYPE html>\n<html lang="tr">\n<head>\n  <meta charset="UTF-8">\n  <title>Hesap Makinesi</title>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <div class="calculator">\n    <div class="display" id="display">0</div>\n    <div class="buttons">\n      <button onclick="clearDisplay()">C</button>\n      <button onclick="appendToDisplay('%')">%</button>\n      <button onclick="appendToDisplay('/')">÷</button>\n      <button onclick="appendToDisplay('*')">×</button>\n      <button onclick="appendToDisplay('7')">7</button>\n      <button onclick="appendToDisplay('8')">8</button>\n      <button onclick="appendToDisplay('9')">9</button>\n      <button onclick="appendToDisplay('-')">−</button>\n      <button onclick="appendToDisplay('4')">4</button>\n      <button onclick="appendToDisplay('5')">5</button>\n      <button onclick="appendToDisplay('6')">6</button>\n      <button onclick="appendToDisplay('+')">+</button>\n      <button onclick="appendToDisplay('1')">1</button>\n      <button onclick="appendToDisplay('2')">2</button>\n      <button onclick="appendToDisplay('3')">3</button>\n      <button class="equals" onclick="calculate()">=</button>\n      <button class="zero" onclick="appendToDisplay('0')">0</button>\n      <button onclick="appendToDisplay('.')">.</button>\n    </div>\n  </div>\n  <script src="script.js"></script>\n</body>\n</html>\n\`\`\`\n\n\`\`\`css:style.css\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { background: #0a0e1a; display: flex; justify-content: center; align-items: center; min-height: 100vh; font-family: Inter, sans-serif; }\n.calculator { background: #1a1f35; border-radius: 16px; padding: 24px; box-shadow: 0 0 40px rgba(124,58,237,0.3); border: 1px solid rgba(124,58,237,0.2); }\n.display { background: #0a0e1a; color: #f8fafc; font-size: 2rem; text-align: right; padding: 16px; border-radius: 8px; margin-bottom: 16px; min-width: 240px; font-family: JetBrains Mono, monospace; }\n.buttons { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }\nbutton { padding: 16px; border: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.05); color: #f8fafc; border-radius: 8px; font-size: 16px; cursor: pointer; transition: all 0.15s; }\nbutton:hover { background: rgba(124,58,237,0.2); border-color: rgba(124,58,237,0.4); }\n.equals { background: #7c3aed; border-color: #7c3aed; grid-row: span 2; }\n.equals:hover { background: #6d28d9; }\n.zero { grid-column: span 2; }\n\`\`\`\n\n\`\`\`javascript:script.js\nlet display = document.getElementById('display');\nlet currentVal = '0';\nfunction updateDisplay() { display.textContent = currentVal; }\nfunction appendToDisplay(val) {\n  if (currentVal === '0' && val !== '.') currentVal = val;\n  else currentVal += val;\n  updateDisplay();\n}\nfunction clearDisplay() { currentVal = '0'; updateDisplay(); }\nfunction calculate() {\n  try { currentVal = String(eval(currentVal)); updateDisplay(); }\n  catch { currentVal = 'Hata'; updateDisplay(); }\n}\n\`\`\``;
+    return `Hesap makinesi oluşturuyorum!\n\n\`\`\`html:index.html\n<!DOCTYPE html>\n<html lang="tr">\n<head><meta charset="UTF-8"><title>Hesap Makinesi</title><link rel="stylesheet" href="style.css"></head>\n<body>\n  <div class="calculator">\n    <div class="display" id="display">0</div>\n    <div class="buttons">\n      <button onclick="clearDisplay()">C</button>\n      <button onclick="appendToDisplay('%')">%</button>\n      <button onclick="appendToDisplay('/')">÷</button>\n      <button onclick="appendToDisplay('*')">×</button>\n      <button onclick="appendToDisplay('7')">7</button>\n      <button onclick="appendToDisplay('8')">8</button>\n      <button onclick="appendToDisplay('9')">9</button>\n      <button onclick="appendToDisplay('-')">−</button>\n      <button onclick="appendToDisplay('4')">4</button>\n      <button onclick="appendToDisplay('5')">5</button>\n      <button onclick="appendToDisplay('6')">6</button>\n      <button onclick="appendToDisplay('+')">+</button>\n      <button onclick="appendToDisplay('1')">1</button>\n      <button onclick="appendToDisplay('2')">2</button>\n      <button onclick="appendToDisplay('3')">3</button>\n      <button class="equals" onclick="calculate()">=</button>\n      <button class="zero" onclick="appendToDisplay('0')">0</button>\n      <button onclick="appendToDisplay('.')">.</button>\n    </div>\n  </div>\n  <script src="script.js"></script>\n</body>\n</html>\n\`\`\`\n\n\`\`\`css:style.css\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { background: #0a0e1a; display: flex; justify-content: center; align-items: center; min-height: 100vh; font-family: Inter, sans-serif; }\n.calculator { background: #1a1f35; border-radius: 16px; padding: 24px; box-shadow: 0 0 40px rgba(124,58,237,0.3); border: 1px solid rgba(124,58,237,0.2); }\n.display { background: #0a0e1a; color: #f8fafc; font-size: 2rem; text-align: right; padding: 16px; border-radius: 8px; margin-bottom: 16px; min-width: 240px; font-family: monospace; }\n.buttons { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }\nbutton { padding: 16px; border: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.05); color: #f8fafc; border-radius: 8px; font-size: 16px; cursor: pointer; transition: all 0.15s; }\nbutton:hover { background: rgba(124,58,237,0.2); }\n.equals { background: #7c3aed; border-color: #7c3aed; grid-row: span 2; }\n.zero { grid-column: span 2; }\n\`\`\`\n\n\`\`\`javascript:script.js\nlet display = document.getElementById('display');\nlet cur = '0';\nfunction updateDisplay() { display.textContent = cur; }\nfunction appendToDisplay(v) { cur = cur === '0' && v !== '.' ? v : cur + v; updateDisplay(); }\nfunction clearDisplay() { cur = '0'; updateDisplay(); }\nfunction calculate() { try { cur = String(eval(cur)); updateDisplay(); } catch { cur = 'Hata'; updateDisplay(); } }\n\`\`\``;
   }
-  return "Puter hesabınızı **Ayarlar > AI Modelleri** bölümünden bağlayarak tüm AI modellerine erişebilirsiniz. Ne yapmak istediğinizi söyleyin!";
+  return `Şu anda AI bağlantısı yok. **Ayarlar > API Anahtarları** bölümünden bir API anahtarı ekleyin veya Puter hesabınızı bağlayın. Aşağıdaki modeller destekleniyor:\n- OpenAI (GPT-4o, GPT-4o Mini)\n- Google (Gemini 2.0 Flash)\n- Anthropic (Claude Sonnet, Haiku)\n- Mistral, DeepSeek`;
 }
 
 export function getFileLanguage(filename: string): string {
