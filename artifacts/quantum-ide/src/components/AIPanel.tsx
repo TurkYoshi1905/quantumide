@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Send, Bot, User, Wand2, Loader2, ChevronDown,
   Code2, Bug, Zap, Sparkles, Trash2, Settings,
-  Check, FileEdit, FilePlus2, AlertCircle, Key, ChevronRight
+  Check, FilePen, FilePlus, FileMinus, AlertCircle, Key, ChevronRight,
+  MessageSquarePlus, MessageSquare, X, Edit3
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { useApp } from "@/contexts/AppContext";
@@ -14,7 +15,7 @@ import VibeCodingModal from "./VibeCodingModal";
 interface FileStep {
   filename: string;
   status: 'pending' | 'working' | 'done' | 'error';
-  isNew: boolean;
+  action: 'create' | 'edit' | 'delete';
 }
 
 function FileStepsCard({ steps }: { steps: FileStep[] }) {
@@ -52,12 +53,19 @@ function FileStepsCard({ steps }: { steps: FileStep[] }) {
               step.status === 'error' ? 'text-destructive' :
               'text-muted-foreground'
             }`}>
-              {step.isNew
+              {step.action === 'create'
                 ? (step.status === 'done' ? 'Oluşturuldu' : step.status === 'working' ? 'Oluşturuluyor...' : step.status === 'error' ? 'Hata' : 'Bekliyor')
+                : step.action === 'delete'
+                ? (step.status === 'done' ? 'Silindi' : step.status === 'working' ? 'Siliniyor...' : step.status === 'error' ? 'Hata' : 'Bekliyor')
                 : (step.status === 'done' ? 'Güncellendi' : step.status === 'working' ? 'Düzenleniyor...' : step.status === 'error' ? 'Hata' : 'Bekliyor')
               }
             </span>
-            {step.isNew ? <FilePlus2 size={11} className="text-muted-foreground shrink-0" /> : <FileEdit size={11} className="text-muted-foreground shrink-0" />}
+            {step.action === 'create'
+              ? <FilePlus size={11} className="text-accent shrink-0" />
+              : step.action === 'delete'
+              ? <FileMinus size={11} className="text-destructive shrink-0" />
+              : <FilePen size={11} className="text-muted-foreground shrink-0" />
+            }
           </motion.div>
         ))}
       </div>
@@ -88,25 +96,32 @@ const PROVIDER_COLORS: Record<string, string> = {
   openai: 'text-green-400', anthropic: 'text-orange-400',
   google: 'text-blue-400', mistral: 'text-purple-400',
   deepseek: 'text-cyan-400', meta: 'text-pink-400', perplexity: 'text-yellow-400',
+  vercel: 'text-foreground',
 };
 
 const PROVIDER_LABELS: Record<string, string> = {
   openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google',
   mistral: 'Mistral', deepseek: 'DeepSeek', meta: 'Meta', perplexity: 'Perplexity',
+  vercel: 'Vercel',
 };
 
 export default function AIPanel() {
   const {
     settings, updateSettings, messages, addMessage, clearMessages,
     activeTab, projects, activeProject, createFile, updateFileContent, openFile,
+    conversations, activeConversationId, setActiveConversationId,
+    createConversation, deleteConversation, renameConversation,
   } = useApp();
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [showKeyDropdown, setShowKeyDropdown] = useState(false);
+  const [showConvDropdown, setShowConvDropdown] = useState(false);
   const [modelSearch, setModelSearch] = useState('');
   const [showVibeCoding, setShowVibeCoding] = useState(false);
   const [fileSteps, setFileSteps] = useState<FileStep[]>([]);
+  const [renamingConvId, setRenamingConvId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [, setLocation] = useLocation();
 
@@ -122,9 +137,10 @@ export default function AIPanel() {
   const displayColor = PROVIDER_COLORS[displayProvider] || 'text-primary';
 
   // ── Key selection logic ───────────────────────────────────────────────────
-  const modelProvider = getProviderForModel(settings.ai.activeModel);
-  const aiProviders = ['openai', 'anthropic', 'google', 'mistral', 'deepseek', 'perplexity'];
+  // 'vercel' is included so Vercel API keys are recognized
+  const aiProviders = ['openai', 'anthropic', 'google', 'mistral', 'deepseek', 'perplexity', 'vercel'];
   const matchingKeys = settings.apiKeys.filter(k => aiProviders.includes(k.provider));
+  const modelProvider = getProviderForModel(settings.ai.activeModel);
 
   const activeKeyEntry = settings.activeKeyId
     ? matchingKeys.find(k => k.id === settings.activeKeyId) || null
@@ -183,7 +199,7 @@ export default function AIPanel() {
     const steps: FileStep[] = parsed.map(pf => ({
       filename: pf.filename,
       status: 'pending',
-      isNew: !existingFiles.find(f => f.name === pf.filename),
+      action: existingFiles.find(f => f.name === pf.filename) ? 'edit' : 'create',
     }));
     setFileSteps(steps);
 
@@ -267,6 +283,8 @@ export default function AIPanel() {
     m.provider.toLowerCase().includes(modelSearch.toLowerCase())
   );
 
+  const activeConv = conversations.find(c => c.id === activeConversationId);
+
   return (
     <div className="h-full flex flex-col bg-card border-l border-border overflow-hidden">
       {/* Header */}
@@ -277,18 +295,107 @@ export default function AIPanel() {
           </div>
           <span className="text-xs font-semibold text-foreground">AI Asistan</span>
           <div className="flex-1" />
+          <button
+            onClick={() => { createConversation(); }}
+            className="p-1 rounded hover:bg-white/10 text-muted-foreground hover:text-foreground transition-colors"
+            title="Yeni Sohbet"
+          >
+            <MessageSquarePlus size={12} />
+          </button>
           <button onClick={() => setLocation('/settings')} className="p-1 rounded hover:bg-white/10 text-muted-foreground hover:text-foreground transition-colors" title="Ayarlar">
             <Settings size={12} />
           </button>
-          <button onClick={clearMessages} className="p-1 rounded hover:bg-white/10 text-muted-foreground hover:text-foreground transition-colors" title="Temizle">
+          <button onClick={clearMessages} className="p-1 rounded hover:bg-white/10 text-muted-foreground hover:text-foreground transition-colors" title="Sohbeti Temizle">
             <Trash2 size={12} />
           </button>
+        </div>
+
+        {/* Conversation Selector */}
+        <div className="relative">
+          <button
+            onClick={() => { setShowConvDropdown(o => !o); setShowModelDropdown(false); setShowKeyDropdown(false); }}
+            className="w-full flex items-center gap-2 px-2 py-1.5 bg-muted/50 rounded-lg text-xs hover:bg-muted/80 transition-colors border border-border/60"
+          >
+            <MessageSquare size={10} className="text-muted-foreground shrink-0" />
+            <span className="flex-1 text-left truncate text-muted-foreground">
+              {activeConv?.title || 'Sohbet seçin'}
+            </span>
+            <span className="text-muted-foreground/60 text-xs shrink-0">{conversations.length} sohbet</span>
+            <ChevronDown size={10} className="text-muted-foreground shrink-0" />
+          </button>
+
+          <AnimatePresence>
+            {showConvDropdown && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowConvDropdown(false)} />
+                <motion.div
+                  initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}
+                  className="absolute top-full left-0 right-0 mt-1 bg-popover border border-popover-border rounded-lg shadow-xl z-50 overflow-hidden"
+                >
+                  <div className="p-1.5 border-b border-border">
+                    <button
+                      onClick={() => { createConversation(); setShowConvDropdown(false); }}
+                      className="w-full flex items-center gap-2 px-2 py-1.5 text-xs bg-primary/10 hover:bg-primary/20 text-primary rounded-md transition-colors"
+                    >
+                      <MessageSquarePlus size={11} /> Yeni Sohbet Başlat
+                    </button>
+                  </div>
+                  <div className="max-h-48 overflow-y-auto py-1">
+                    {conversations.map(conv => (
+                      <div key={conv.id} className="group flex items-center gap-1 px-2 hover:bg-white/5 transition-colors">
+                        {renamingConvId === conv.id ? (
+                          <input
+                            autoFocus
+                            value={renameValue}
+                            onChange={e => setRenameValue(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter' && renameValue.trim()) {
+                                renameConversation(conv.id, renameValue.trim());
+                                setRenamingConvId(null);
+                              }
+                              if (e.key === 'Escape') setRenamingConvId(null);
+                            }}
+                            className="flex-1 py-1 text-xs bg-muted border border-primary rounded outline-none text-foreground px-1"
+                          />
+                        ) : (
+                          <button
+                            onClick={() => { setActiveConversationId(conv.id); setShowConvDropdown(false); }}
+                            className={`flex-1 flex items-center gap-2 py-1.5 text-xs text-left transition-colors ${conv.id === activeConversationId ? 'text-primary' : 'text-foreground'}`}
+                          >
+                            <MessageSquare size={10} className={conv.id === activeConversationId ? 'text-primary' : 'text-muted-foreground'} />
+                            <span className="truncate flex-1">{conv.title}</span>
+                            <span className="text-muted-foreground/60 shrink-0">{conv.messages.length}</span>
+                          </button>
+                        )}
+                        <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                          <button
+                            onClick={() => { setRenamingConvId(conv.id); setRenameValue(conv.title); }}
+                            className="p-1 rounded hover:bg-white/10 text-muted-foreground hover:text-foreground"
+                          >
+                            <Edit3 size={9} />
+                          </button>
+                          {conversations.length > 1 && (
+                            <button
+                              onClick={() => deleteConversation(conv.id)}
+                              className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
+                            >
+                              <X size={9} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </motion.div>
+              </>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Model Selector */}
         <div className="relative">
           <button
-            onClick={() => { setShowModelDropdown(o => !o); setModelSearch(''); setShowKeyDropdown(false); }}
+            onClick={() => { setShowModelDropdown(o => !o); setModelSearch(''); setShowKeyDropdown(false); setShowConvDropdown(false); }}
             className="w-full flex items-center gap-2 px-2 py-1.5 bg-muted rounded-lg text-xs hover:bg-muted/80 transition-colors border border-border"
           >
             <Sparkles size={11} className={displayColor} />
@@ -337,7 +444,7 @@ export default function AIPanel() {
         {/* Key Selector */}
         <div className="relative">
           <button
-            onClick={() => { setShowKeyDropdown(o => !o); setShowModelDropdown(false); }}
+            onClick={() => { setShowKeyDropdown(o => !o); setShowModelDropdown(false); setShowConvDropdown(false); }}
             className="w-full flex items-center gap-2 px-2 py-1.5 bg-muted/50 rounded-lg text-xs hover:bg-muted/80 transition-colors border border-border/60"
           >
             <Key size={10} className={getActiveSourceColor()} />
@@ -414,7 +521,6 @@ export default function AIPanel() {
                     </div>
                   )}
 
-                  {/* Demo mode indicator */}
                   {matchingKeys.length === 0 && !isPuterConnected && (
                     <div className="px-3 py-2 border-t border-border">
                       <div className="flex items-center gap-2">

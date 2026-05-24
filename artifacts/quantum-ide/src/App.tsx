@@ -8,6 +8,7 @@ import Login from "@/pages/Login";
 import Register from "@/pages/Register";
 import IDE from "@/pages/IDE";
 import Settings from "@/pages/Settings";
+import VerifyEmail from "@/pages/VerifyEmail";
 import NotFound from "@/pages/not-found";
 import { Code2 } from "lucide-react";
 
@@ -34,16 +35,18 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   const { user, dbReady } = useApp();
   const [location, setLocation] = useLocation();
 
+  const publicRoutes = ['/login', '/register', '/verify-email'];
+  const isPublic = publicRoutes.includes(location);
+
   useEffect(() => {
     if (!dbReady) return;
-    if (!user && location !== '/login' && location !== '/register') {
+    if (!user && !isPublic) {
       setLocation('/login');
     }
-    // If user is logged in and on login/register page, redirect to IDE
     if (user && (location === '/login' || location === '/register')) {
       setLocation('/');
     }
-  }, [user, location, setLocation, dbReady]);
+  }, [user, location, setLocation, dbReady, isPublic]);
 
   if (!dbReady) return <LoadingScreen />;
 
@@ -56,6 +59,7 @@ function Router() {
       <Switch>
         <Route path="/login" component={Login} />
         <Route path="/register" component={Register} />
+        <Route path="/verify-email" component={VerifyEmail} />
         <Route path="/settings" component={Settings} />
         <Route path="/" component={IDE} />
         <Route component={NotFound} />

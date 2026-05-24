@@ -3,6 +3,8 @@ export interface User {
   name: string;
   email: string;
   puterUsername?: string;
+  supabaseId?: string;
+  emailVerified?: boolean;
 }
 
 export interface FileNode {
@@ -58,6 +60,14 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   isTyping?: boolean;
+}
+
+export interface Conversation {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface GitHubSettings {

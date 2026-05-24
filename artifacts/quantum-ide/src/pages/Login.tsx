@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { Code2, Mail, Lock, Eye, EyeOff, Loader2 } from "lucide-react";
 import { useLocation } from "wouter";
 import { useApp } from "@/contexts/AppContext";
+import { supabaseSignIn, getSupabase } from "@/lib/supabase";
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -19,9 +20,44 @@ export default function Login() {
     if (!email || !password) { setError('Tüm alanları doldurun.'); return; }
     setLoading(true);
     setError('');
-    await new Promise(r => setTimeout(r, 600));
-    setUser({ id: `user-${Date.now()}`, name: email.split('@')[0], email });
-    setLocation('/');
+
+    const sb = getSupabase();
+    if (sb) {
+      try {
+        const data = await supabaseSignIn(email, password);
+        const sbUser = data.user;
+        if (!sbUser) throw new Error('Giriş başarısız.');
+
+        if (!sbUser.email_confirmed_at) {
+          setLocation('/verify-email');
+          setLoading(false);
+          return;
+        }
+
+        const name = sbUser.user_metadata?.full_name || email.split('@')[0];
+        setUser({
+          id: `supabase-${sbUser.id}`,
+          name,
+          email: sbUser.email || email,
+          supabaseId: sbUser.id,
+          emailVerified: true,
+        });
+        setLocation('/');
+      } catch (e: any) {
+        const msg = e?.message || '';
+        if (msg.includes('Invalid login credentials') || msg.includes('invalid_credentials')) {
+          setError('E-posta veya şifre yanlış.');
+        } else if (msg.includes('Email not confirmed')) {
+          setLocation('/verify-email');
+        } else {
+          setError(msg || 'Giriş başarısız. Lütfen tekrar deneyin.');
+        }
+      }
+    } else {
+      await new Promise(r => setTimeout(r, 600));
+      setUser({ id: `user-${Date.now()}`, name: email.split('@')[0], email });
+      setLocation('/');
+    }
     setLoading(false);
   };
 
@@ -39,8 +75,8 @@ export default function Login() {
       setPuterUser(info);
       updateSettings({ ...settings, ai: { ...settings.ai, puterConnected: true } });
       const name = info?.username || info?.name || 'Puter Kullanıcısı';
-      const email = info?.email || `${info?.username}@puter.com`;
-      setUser({ id: `puter-${info?.uuid || Date.now()}`, name, email, puterUsername: info?.username });
+      const userEmail = info?.email || `${info?.username}@puter.com`;
+      setUser({ id: `puter-${info?.uuid || Date.now()}`, name, email: userEmail, puterUsername: info?.username });
       setLocation('/');
     } catch (e: any) {
       if (!e?.message?.includes('cancel') && !e?.message?.includes('close')) {
@@ -50,6 +86,8 @@ export default function Login() {
       setPuterLoading(false);
     }
   };
+
+  const isSupabaseEnabled = !!getSupabase();
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4 relative overflow-hidden">
@@ -82,7 +120,6 @@ export default function Login() {
         <div className="bg-card border border-border rounded-2xl p-6 shadow-2xl" style={{ boxShadow: '0 0 40px rgba(124,58,237,0.15)' }}>
           <h2 className="text-base font-semibold text-foreground mb-5">Hesabınıza Giriş Yapın</h2>
 
-          {/* Puter Login - Primary */}
           <button
             data-testid="btn-puter-login"
             onClick={handlePuterLogin}
@@ -102,7 +139,11 @@ export default function Login() {
 
           <div className="relative my-4">
             <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-border" /></div>
-            <div className="relative flex justify-center"><span className="bg-card px-2 text-xs text-muted-foreground">veya e-posta ile</span></div>
+            <div className="relative flex justify-center">
+              <span className="bg-card px-2 text-xs text-muted-foreground">
+                {isSupabaseEnabled ? 'veya e-posta ile' : 'veya yerel hesap ile'}
+              </span>
+            </div>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-3">

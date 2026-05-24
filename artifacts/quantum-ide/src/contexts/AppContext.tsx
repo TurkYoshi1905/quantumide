@@ -1,14 +1,24 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
-import type { User, Project, FileNode, Tab, AppSettings, ChatMessage } from "@/types";
+import type { User, Project, FileNode, Tab, AppSettings, ChatMessage, Conversation } from "@/types";
 import { dbSaveProjects, dbLoadProjects, dbSet, dbGet } from "@/lib/db";
 import { DEFAULT_SYSTEM_PROMPT } from "@/lib/ai";
+import {
+  getSupabase, supabaseGetSession, supabaseSaveProjects,
+  supabaseLoadAllData, supabaseSaveConversations, supabaseSaveSettings,
+} from "@/lib/supabase";
 
-const INIT_MESSAGE: ChatMessage = {
-  id: 'init-1',
-  role: 'assistant',
-  content: 'Merhaba! Ben QuantumIDE yapay zeka asistanıyım.\n\nAyarlar bölümünden API anahtarınızı ekleyerek veya Puter hesabınızı bağlayarak AI modellerini kullanabilirsiniz.\n\nNasıl yardımcı olabilirim?',
-  timestamp: Date.now()
-};
+const makeInitConversation = (): Conversation => ({
+  id: `conv-${Date.now()}`,
+  title: 'Yeni Sohbet',
+  messages: [{
+    id: 'init-1',
+    role: 'assistant',
+    content: 'Merhaba! Ben QuantumIDE yapay zeka asistanıyım.\n\nAyarlar bölümünden API anahtarınızı ekleyerek veya Puter hesabınızı bağlayarak AI modellerini kullanabilirsiniz.\n\nNasıl yardımcı olabilirim?',
+    timestamp: Date.now()
+  }],
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+});
 
 const DEFAULT_SETTINGS: AppSettings = {
   ai: { activeModel: 'gpt-4o', puterConnected: false },
@@ -44,6 +54,12 @@ interface AppContextType {
   deleteProject: (projectId: string) => void;
   settings: AppSettings;
   updateSettings: (settings: AppSettings) => void;
+  conversations: Conversation[];
+  activeConversationId: string;
+  setActiveConversationId: (id: string) => void;
+  createConversation: () => Conversation;
+  deleteConversation: (id: string) => void;
+  renameConversation: (id: string, title: string) => void;
   messages: ChatMessage[];
   addMessage: (msg: ChatMessage) => void;
   clearMessages: () => void;
@@ -65,22 +81,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTab, setActiveTabState] = useState<Tab | null>(null);
   const [settings, setSettingsState] = useState<AppSettings>(DEFAULT_SETTINGS);
-  const [messages, setMessages] = useState<ChatMessage[]>([INIT_MESSAGE]);
+  const [conversations, setConversationsState] = useState<Conversation[]>([]);
+  const [activeConversationId, setActiveConversationIdState] = useState<string>('');
   const [glowingFiles, setGlowingFiles] = useState<GlowingFile>({});
   const [savedTab, setSavedTab] = useState<string | null>(null);
 
   const projectSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const messageSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const convSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const settingsSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const supabaseUserId = useRef<string | null>(null);
+
+  const activeConversation = conversations.find(c => c.id === activeConversationId) || conversations[0] || null;
+  const messages = activeConversation?.messages || [];
 
   useEffect(() => {
     async function initDB() {
       try {
         const [savedProjects, savedMessages, savedSettings, savedUser] = await Promise.all([
           dbLoadProjects(),
-          dbGet<ChatMessage[]>('messages', [INIT_MESSAGE]),
+          dbGet<ChatMessage[]>('messages', []),
           dbGet<AppSettings>('settings', DEFAULT_SETTINGS),
           dbGet<User | null>('user', null),
         ]);
+
+        const savedConvs = await dbGet<Conversation[]>('conversations', []);
 
         const loadedProjects = (savedProjects as Project[]).length > 0
           ? (savedProjects as Project[])
@@ -88,7 +112,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         setProjectsState(loadedProjects);
         setActiveProjectState(loadedProjects[0] || null);
-        setMessages(savedMessages.length > 0 ? savedMessages : [INIT_MESSAGE]);
 
         const merged: AppSettings = {
           ai: {
@@ -103,8 +126,53 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         };
         setSettingsState(merged);
         setUserState(savedUser);
+
+        let convs: Conversation[] = Array.isArray(savedConvs) && savedConvs.length > 0
+          ? savedConvs
+          : [];
+
+        // Migrate old flat messages to first conversation
+        if (convs.length === 0) {
+          const initConv = makeInitConversation();
+          if ((savedMessages as ChatMessage[]).length > 0) {
+            initConv.messages = savedMessages as ChatMessage[];
+            initConv.title = 'Sohbet 1';
+          }
+          convs = [initConv];
+        }
+
+        setConversationsState(convs);
+        setActiveConversationIdState(convs[0].id);
+
+        // Try Supabase load if session exists
+        const session = await supabaseGetSession();
+        if (session?.user) {
+          supabaseUserId.current = session.user.id;
+          const cloudData = await supabaseLoadAllData(session.user.id);
+          if (cloudData) {
+            if (cloudData.projects?.length > 0) {
+              setProjectsState(cloudData.projects);
+              setActiveProjectState(cloudData.projects[0]);
+            }
+            if (cloudData.conversations?.length > 0) {
+              setConversationsState(cloudData.conversations);
+              setActiveConversationIdState(cloudData.conversations[0].id);
+            }
+            if (cloudData.settings) {
+              const cs: AppSettings = {
+                ai: cloudData.settings.ai || merged.ai,
+                github: cloudData.settings.github || merged.github,
+                editorFontSize: cloudData.settings.editorFontSize || 14,
+                apiKeys: cloudData.settings.apiKeys || [],
+                systemPrompt: cloudData.settings.systemPrompt || DEFAULT_SYSTEM_PROMPT,
+                activeKeyId: cloudData.settings.activeKeyId ?? null,
+              };
+              setSettingsState(cs);
+            }
+          }
+        }
       } catch (e) {
-        console.error('IndexedDB yüklenemedi, localStorage fallback.', e);
+        console.error('DB yüklenemedi, localStorage fallback.', e);
         try {
           const sp = JSON.parse(localStorage.getItem('qide_projects') || 'null');
           if (sp) { setProjectsState(sp); setActiveProjectState(sp[0] || null); }
@@ -113,6 +181,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           const su = JSON.parse(localStorage.getItem('qide_user') || 'null');
           if (su) setUserState(su);
         } catch { /* ignore */ }
+        const initConv = makeInitConversation();
+        setConversationsState([initConv]);
+        setActiveConversationIdState(initConv.id);
       } finally {
         setDbReady(true);
       }
@@ -141,19 +212,48 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setTimeout(checkPuter, 800);
   }, [dbReady]);
 
+  // Keep activeProject in sync with projects state (real-time file updates)
+  useEffect(() => {
+    if (activeProject) {
+      const updated = projects.find(p => p.id === activeProject.id);
+      if (updated && updated !== activeProject) {
+        setActiveProjectState(updated);
+      }
+    }
+  }, [projects, activeProject]);
+
   const debouncedSaveProjects = useCallback((updated: Project[]) => {
     if (projectSaveTimer.current) clearTimeout(projectSaveTimer.current);
-    projectSaveTimer.current = setTimeout(() => { dbSaveProjects(updated); }, 400);
+    projectSaveTimer.current = setTimeout(() => {
+      dbSaveProjects(updated);
+      if (supabaseUserId.current) supabaseSaveProjects(supabaseUserId.current, updated);
+    }, 400);
   }, []);
 
-  const debouncedSaveMessages = useCallback((updated: ChatMessage[]) => {
-    if (messageSaveTimer.current) clearTimeout(messageSaveTimer.current);
-    messageSaveTimer.current = setTimeout(() => { dbSet('messages', updated); }, 400);
+  const debouncedSaveConversations = useCallback((updated: Conversation[]) => {
+    if (convSaveTimer.current) clearTimeout(convSaveTimer.current);
+    convSaveTimer.current = setTimeout(() => {
+      dbSet('conversations', updated);
+      if (supabaseUserId.current) supabaseSaveConversations(supabaseUserId.current, updated);
+    }, 400);
+  }, []);
+
+  const debouncedSaveSettings = useCallback((updated: AppSettings) => {
+    if (settingsSaveTimer.current) clearTimeout(settingsSaveTimer.current);
+    settingsSaveTimer.current = setTimeout(() => {
+      dbSet('settings', updated);
+      if (supabaseUserId.current) supabaseSaveSettings(supabaseUserId.current, updated);
+    }, 400);
   }, []);
 
   const setUser = useCallback((u: User | null) => {
     setUserState(u);
     dbSet('user', u);
+    if (u?.supabaseId) {
+      supabaseUserId.current = u.supabaseId;
+    } else {
+      supabaseUserId.current = null;
+    }
   }, []);
 
   const setPuterUser = useCallback((u: any) => { setPuterUserState(u); }, []);
@@ -167,8 +267,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const updateSettings = useCallback((s: AppSettings) => {
     setSettingsState(s);
-    dbSet('settings', s);
-  }, []);
+    debouncedSaveSettings(s);
+  }, [debouncedSaveSettings]);
 
   const openFile = useCallback((file: FileNode, project: Project) => {
     if (file.type === 'folder') return;
@@ -277,19 +377,76 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setTabs(prev => prev.filter(t => t.projectId !== projectId));
   }, [activeProject, debouncedSaveProjects]);
 
-  const addMessage = useCallback((msg: ChatMessage) => {
-    setMessages(prev => {
-      const updated = [...prev, msg];
-      debouncedSaveMessages(updated);
+  // ── Conversation management ───────────────────────────────────────────────
+
+  const setActiveConversationId = useCallback((id: string) => {
+    setActiveConversationIdState(id);
+  }, []);
+
+  const createConversation = useCallback((): Conversation => {
+    const conv = makeInitConversation();
+    conv.title = `Sohbet ${Date.now().toString().slice(-4)}`;
+    setConversationsState(prev => {
+      const updated = [conv, ...prev];
+      debouncedSaveConversations(updated);
       return updated;
     });
-  }, [debouncedSaveMessages]);
+    setActiveConversationIdState(conv.id);
+    return conv;
+  }, [debouncedSaveConversations]);
+
+  const deleteConversation = useCallback((id: string) => {
+    setConversationsState(prev => {
+      const updated = prev.filter(c => c.id !== id);
+      if (updated.length === 0) {
+        const newConv = makeInitConversation();
+        updated.push(newConv);
+        setActiveConversationIdState(newConv.id);
+      } else if (id === activeConversationId) {
+        setActiveConversationIdState(updated[0].id);
+      }
+      debouncedSaveConversations(updated);
+      return updated;
+    });
+  }, [activeConversationId, debouncedSaveConversations]);
+
+  const renameConversation = useCallback((id: string, title: string) => {
+    setConversationsState(prev => {
+      const updated = prev.map(c => c.id === id ? { ...c, title } : c);
+      debouncedSaveConversations(updated);
+      return updated;
+    });
+  }, [debouncedSaveConversations]);
+
+  const addMessage = useCallback((msg: ChatMessage) => {
+    setConversationsState(prev => {
+      const updated = prev.map(c => {
+        if (c.id !== activeConversationId) return c;
+        const newMessages = [...c.messages, msg];
+        const title = c.title === 'Yeni Sohbet' && c.messages.length <= 1 && msg.role === 'user'
+          ? msg.content.slice(0, 40).replace(/\n/g, ' ')
+          : c.title;
+        return { ...c, messages: newMessages, title, updatedAt: Date.now() };
+      });
+      debouncedSaveConversations(updated);
+      return updated;
+    });
+  }, [activeConversationId, debouncedSaveConversations]);
 
   const clearMessages = useCallback(() => {
-    const reset = [INIT_MESSAGE];
-    setMessages(reset);
-    dbSet('messages', reset);
-  }, []);
+    setConversationsState(prev => {
+      const initMsg: ChatMessage = {
+        id: 'init-1', role: 'assistant',
+        content: 'Merhaba! Ben QuantumIDE yapay zeka asistanıyım.\n\nNasıl yardımcı olabilirim?',
+        timestamp: Date.now()
+      };
+      const updated = prev.map(c =>
+        c.id === activeConversationId ? { ...c, messages: [initMsg], updatedAt: Date.now() } : c
+      );
+      debouncedSaveConversations(updated);
+      return updated;
+    });
+  }, [activeConversationId, debouncedSaveConversations]);
 
   const setGlowingFile = useCallback((fileId: string, value: boolean) => {
     setGlowingFiles(prev => ({ ...prev, [fileId]: value }));
@@ -311,6 +468,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       updateFileContent, saveActiveFile,
       createFile, deleteFile, renameFile, createProject, deleteProject,
       settings, updateSettings,
+      conversations, activeConversationId, setActiveConversationId,
+      createConversation, deleteConversation, renameConversation,
       messages, addMessage, clearMessages,
       glowingFiles, setGlowingFile,
       savedTab, setSavedTab,
