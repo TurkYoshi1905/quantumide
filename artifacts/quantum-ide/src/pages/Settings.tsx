@@ -1,9 +1,9 @@
 import { useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  ArrowLeft, Bot, Github, Eye, User, Save, CheckCircle2, Loader2, Code2,
-  Key, Plus, Trash2, Edit3, Search, Check, AlertCircle, RefreshCw,
-  ChevronDown, Copy, FileText, Zap, Unlink, DollarSign, X
+  ArrowLeft, Bot, Github, Eye, User, CheckCircle2, Loader2, Code2,
+  Key, Plus, Trash2, Edit3, Search, Check, AlertCircle,
+  ChevronDown, Copy, FileText, Zap, Unlink, DollarSign, X, Lock
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { useApp } from "@/contexts/AppContext";
@@ -262,11 +262,6 @@ export default function Settings() {
   // Models
   const [modelSearch, setModelSearch] = useState('');
 
-  // System Prompt
-  const [promptDraft, setPromptDraft] = useState(settings.systemPrompt || DEFAULT_SYSTEM_PROMPT);
-  const [promptSaved, setPromptSaved] = useState(false);
-  const promptRef = useRef<HTMLTextAreaElement>(null);
-
   // GitHub
   const [githubToken, setGithubToken] = useState(settings.github.token || '');
   const [githubConnecting, setGithubConnecting] = useState(false);
@@ -379,18 +374,6 @@ export default function Settings() {
     try { await puter?.auth?.signOut(); } catch { /* ignore */ }
     setPuterUser(null);
     updateSettings({ ...settings, ai: { ...settings.ai, puterConnected: false } });
-  };
-
-  // ── System Prompt ────────────────────────────────────────────────────────
-  const savePrompt = () => {
-    updateSettings({ ...settings, systemPrompt: promptDraft });
-    setPromptSaved(true);
-    setTimeout(() => setPromptSaved(false), 2000);
-  };
-
-  const resetPrompt = () => {
-    setPromptDraft(DEFAULT_SYSTEM_PROMPT);
-    updateSettings({ ...settings, systemPrompt: DEFAULT_SYSTEM_PROMPT });
   };
 
   // ── Model filter ──────────────────────────────────────────────────────────
@@ -644,37 +627,27 @@ export default function Settings() {
               <div>
                 <h2 className="text-base font-semibold text-foreground mb-1">Sistem Promptu</h2>
                 <p className="text-xs text-muted-foreground mb-4">
-                  AI asistanının kişiliğini, dosya oluşturma kurallarını ve tasarım standartlarını belirleyen sistem promptu. İngilizce olarak yazılmıştır.
+                  AI asistanının kişiliğini, tasarım standartlarını ve kod kalite kurallarını belirleyen sistem promptu.
+                  Bu prompt sabit olup değiştirilemez.
                 </p>
+
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 mb-4">
+                  <Lock size={12} className="text-amber-500 shrink-0" />
+                  <span className="text-xs text-amber-400">
+                    Bu sistem promptu korunmaktadır ve düzenlenemez. Profesyonel AI davranışı için sabit tutulmaktadır.
+                  </span>
+                </div>
 
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs text-muted-foreground">
-                    {promptDraft.split('\n').length} satır, {promptDraft.length} karakter
+                    {DEFAULT_SYSTEM_PROMPT.split('\n').length} satır, {DEFAULT_SYSTEM_PROMPT.length} karakter
                   </span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={resetPrompt}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:text-foreground hover:bg-white/5 border border-border transition-colors"
-                    >
-                      <RefreshCw size={11} /> Sıfırla
-                    </button>
-                    <button
-                      onClick={savePrompt}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-primary text-primary-foreground hover:bg-primary/80 transition-colors"
-                    >
-                      {promptSaved ? <><CheckCircle2 size={11} /> Kaydedildi!</> : <><Save size={11} /> Kaydet</>}
-                    </button>
-                  </div>
+                  <span className="text-xs text-primary/70 font-medium">QuantumIDE AI v1.0</span>
                 </div>
 
-                <textarea
-                  ref={promptRef}
-                  value={promptDraft}
-                  onChange={e => setPromptDraft(e.target.value)}
-                  className="w-full h-[520px] px-4 py-3 bg-muted border border-border rounded-xl text-xs text-foreground placeholder:text-muted-foreground outline-none focus:border-primary resize-none font-mono leading-relaxed transition-colors"
-                  placeholder="Sistem promptunu buraya yazın..."
-                  spellCheck={false}
-                />
+                <div className="w-full h-[520px] px-4 py-3 bg-muted border border-border rounded-xl text-xs text-muted-foreground font-mono leading-relaxed overflow-y-auto select-none cursor-not-allowed opacity-75 whitespace-pre-wrap">
+                  {DEFAULT_SYSTEM_PROMPT}
+                </div>
 
                 <p className="text-xs text-muted-foreground mt-2">
                   Bu prompt her AI mesajında gönderilir. Dosya formatı kuralları, tasarım standartları ve AI kimliği burada tanımlanır.
