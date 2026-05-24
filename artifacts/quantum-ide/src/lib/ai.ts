@@ -275,6 +275,8 @@ export async function callPuterAI(
   const modelProvider = modelInfo?.provider || null;
 
   // ── 1. Try the user-selected key first ───────────────────────────────────
+  const AI_PROVIDERS = ['openai', 'anthropic', 'google', 'mistral', 'deepseek', 'perplexity'];
+
   if (apiKeys && apiKeys.length > 0) {
     let selectedKey: ApiKeyInfo | null = null;
 
@@ -287,6 +289,9 @@ export async function callPuterAI(
     }
 
     if (selectedKey) {
+      if (!AI_PROVIDERS.includes(selectedKey.provider)) {
+        return `"${selectedKey.provider}" anahtarı bir AI sağlayıcısı değil. Lütfen Ayarlar > API Anahtarları bölümünden OpenAI, Anthropic, Google, Mistral veya DeepSeek anahtarı ekleyin.`;
+      }
       try {
         return await callDirectAPI(selectedKey.provider, selectedKey.key, modelId, conversationMessages);
       } catch (e: any) {
@@ -295,7 +300,7 @@ export async function callPuterAI(
           return `API anahtarı geçersiz veya yetkisiz (${selectedKey.provider}). Ayarlar > API Anahtarları bölümünden anahtarınızı kontrol edin.`;
         }
         if (msg.includes('CORS') || msg.includes('NetworkError') || msg.includes('Failed to fetch')) {
-          return `${selectedKey.provider} CORS kısıtlaması nedeniyle tarayıcıdan doğrudan çağrılamıyor. Puter hesabınızı bağlayarak bu modeli kullanabilirsiniz.`;
+          return `${selectedKey.provider} API çağrısı başarısız oldu. İnternet bağlantınızı kontrol edin ve tekrar deneyin.`;
         }
       }
     }

@@ -30,8 +30,7 @@ export default function Register() {
         const sbUser = data.user;
 
         if (sbUser && !sbUser.email_confirmed_at) {
-          setSuccess(true);
-          setTimeout(() => setLocation('/verify-email'), 2000);
+          setLocation('/verify-email');
         } else if (sbUser?.email_confirmed_at) {
           setUser({
             id: `supabase-${sbUser.id}`,

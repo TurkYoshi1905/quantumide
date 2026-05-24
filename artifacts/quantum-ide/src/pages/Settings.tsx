@@ -2,12 +2,13 @@ import { useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft, Bot, Github, Eye, User, CheckCircle2, Loader2, Code2,
-  Key, Plus, Trash2, Edit3, Search, Check, AlertCircle,
-  ChevronDown, Copy, FileText, Zap, Unlink, DollarSign, X, Lock
+  Key, Plus, Trash2, Edit3, Search, Check, AlertCircle, RefreshCw, Save,
+  ChevronDown, Copy, FileText, Zap, Unlink, DollarSign, X, Lock, Bell
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { useApp } from "@/contexts/AppContext";
 import { ALL_MODELS, DEFAULT_SYSTEM_PROMPT } from "@/lib/ai";
+import { CHANGELOG } from "@/lib/changelogData";
 import type { ApiKeyEntry, ApiProvider } from "@/types";
 
 // ── Provider definitions ────────────────────────────────────────────────────
@@ -98,12 +99,13 @@ function ProviderIcon({ id, size = 20 }: { id: ApiProvider; size?: number }) {
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────
 const TABS = [
-  { id: 'apikeys',    label: 'API Anahtarları', icon: Key },
-  { id: 'models',    label: 'AI Modelleri',    icon: Bot },
-  { id: 'prompt',    label: 'Sistem Promptu', icon: FileText },
-  { id: 'github',    label: 'GitHub',          icon: Github },
-  { id: 'appearance',label: 'Görünüm',         icon: Eye },
-  { id: 'account',   label: 'Hesap',           icon: User },
+  { id: 'apikeys',    label: 'API Anahtarları',  icon: Key },
+  { id: 'models',    label: 'AI Modelleri',     icon: Bot },
+  { id: 'prompt',    label: 'Sistem Promptu',  icon: FileText },
+  { id: 'github',    label: 'GitHub',           icon: Github },
+  { id: 'appearance',label: 'Görünüm',          icon: Eye },
+  { id: 'account',   label: 'Hesap',            icon: User },
+  { id: 'changelog', label: 'Güncelleme Notları', icon: Bell },
 ];
 
 const PROVIDER_COLORS: Record<string, string> = {
@@ -797,6 +799,47 @@ export default function Settings() {
                     Çıkış Yap
                   </button>
                 )}
+              </div>
+            )}
+
+            {/* ══ CHANGELOG TAB ════════════════════════════════════════════ */}
+            {activeTab === 'changelog' && (
+              <div>
+                <h2 className="text-base font-semibold text-foreground mb-1">Güncelleme Notları</h2>
+                <p className="text-xs text-muted-foreground mb-5">QuantumIDE sürüm geçmişi ve yapılan değişiklikler.</p>
+
+                <div className="space-y-5">
+                  {CHANGELOG.map((entry) => (
+                    <div key={entry.version} className="rounded-xl border border-border bg-card overflow-hidden">
+                      <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-white/2">
+                        <span className="text-sm font-bold text-foreground font-mono">{entry.version}</span>
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                          entry.tag === 'major' ? 'bg-accent/20 text-accent' :
+                          entry.tag === 'minor' ? 'bg-primary/20 text-primary' :
+                          'bg-muted-foreground/20 text-muted-foreground'
+                        }`}>
+                          {entry.tag === 'major' ? 'Büyük' : entry.tag === 'minor' ? 'Küçük' : 'Düzeltme'}
+                        </span>
+                        <span className="text-xs text-muted-foreground ml-auto">{entry.date}</span>
+                      </div>
+                      <ul className="divide-y divide-border/50">
+                        {entry.changes.map((c, i) => (
+                          <li key={i} className="flex items-start gap-3 px-4 py-2.5">
+                            <span className={`mt-0.5 shrink-0 w-14 text-center text-xs font-medium px-1.5 py-0.5 rounded ${
+                              c.type === 'new'     ? 'bg-accent/15 text-accent' :
+                              c.type === 'fix'     ? 'bg-destructive/15 text-destructive' :
+                              c.type === 'improve' ? 'bg-primary/15 text-primary' :
+                                                     'bg-muted-foreground/15 text-muted-foreground'
+                            }`}>
+                              {c.type === 'new' ? 'YENİ' : c.type === 'fix' ? 'DÜZ' : c.type === 'improve' ? 'İYİ' : 'KALD'}
+                            </span>
+                            <span className="text-xs text-foreground leading-relaxed">{c.text}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
