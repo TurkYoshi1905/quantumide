@@ -63,6 +63,7 @@ interface AppContextType {
   renameConversation: (id: string, title: string) => void;
   messages: ChatMessage[];
   addMessage: (msg: ChatMessage) => void;
+  updateMessage: (msgId: string, updates: Partial<ChatMessage>) => void;
   clearMessages: () => void;
   glowingFiles: GlowingFile;
   setGlowingFile: (fileId: string, value: boolean) => void;
@@ -434,6 +435,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
   }, [activeConversationId, debouncedSaveConversations]);
 
+  const updateMessage = useCallback((msgId: string, updates: Partial<ChatMessage>) => {
+    setConversationsState(prev => {
+      const updated = prev.map(c => {
+        if (c.id !== activeConversationId) return c;
+        return { ...c, messages: c.messages.map(m => m.id === msgId ? { ...m, ...updates } : m), updatedAt: Date.now() };
+      });
+      debouncedSaveConversations(updated);
+      return updated;
+    });
+  }, [activeConversationId, debouncedSaveConversations]);
+
   const clearMessages = useCallback(() => {
     setConversationsState(prev => {
       const initMsg: ChatMessage = {
@@ -471,7 +483,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       settings, updateSettings,
       conversations, activeConversationId, setActiveConversationId,
       createConversation, deleteConversation, renameConversation,
-      messages, addMessage, clearMessages,
+      messages, addMessage, updateMessage, clearMessages,
       glowingFiles, setGlowingFile,
       savedTab, setSavedTab,
       dbReady,

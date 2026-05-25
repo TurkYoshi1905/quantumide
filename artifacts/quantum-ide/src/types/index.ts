@@ -54,12 +54,20 @@ export interface AISettings {
   puterConnected: boolean;
 }
 
+export interface FileOperationResult {
+  filename: string;
+  action: 'create' | 'edit' | 'delete';
+  fileId?: string;
+  projectId?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
   isTyping?: boolean;
+  fileOperations?: FileOperationResult[];
 }
 
 export interface Conversation {

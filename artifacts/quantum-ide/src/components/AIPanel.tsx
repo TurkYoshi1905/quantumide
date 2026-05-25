@@ -9,7 +9,7 @@ import {
 import { useLocation } from "wouter";
 import { useApp } from "@/contexts/AppContext";
 import { callPuterAI, ALL_MODELS, getModelById, parseFilesFromAIResponse, getProviderForModel } from "@/lib/ai";
-import type { ChatMessage } from "@/types";
+import type { ChatMessage, FileOperationResult, FileNode, Project } from "@/types";
 import VibeCodingModal from "./VibeCodingModal";
 
 interface FileStep {
@@ -92,6 +92,51 @@ function MessageContent({ content }: { content: string }) {
   );
 }
 
+function findFileById(files: FileNode[], id: string): FileNode | null {
+  for (const f of files) {
+    if (f.id === id) return f;
+    if (f.children) {
+      const found = findFileById(f.children, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function FileOpsInMessage({ ops, projects, onOpenFile }: {
+  ops: FileOperationResult[];
+  projects: Project[];
+  onOpenFile: (file: FileNode, project: Project) => void;
+}) {
+  return (
+    <div className="mt-2 space-y-1 border-t border-white/10 pt-2">
+      {ops.map((op, i) => {
+        const project = op.projectId ? projects.find(p => p.id === op.projectId) : null;
+        const file = project && op.fileId ? findFileById(project.files, op.fileId) : null;
+        return (
+          <button
+            key={i}
+            onClick={() => file && project ? onOpenFile(file, project) : undefined}
+            disabled={!file}
+            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-accent/10 border border-accent/20 hover:bg-accent/20 disabled:opacity-50 disabled:cursor-default transition-colors text-left group"
+          >
+            {op.action === 'create'
+              ? <FilePlus size={11} className="text-accent shrink-0" />
+              : op.action === 'delete'
+              ? <FileMinus size={11} className="text-destructive shrink-0" />
+              : <FilePen size={11} className="text-muted-foreground shrink-0" />}
+            <span className="text-xs font-mono text-foreground flex-1 truncate">{op.filename}</span>
+            <span className={`text-xs shrink-0 ${op.action === 'create' ? 'text-accent' : op.action === 'delete' ? 'text-destructive' : 'text-muted-foreground'}`}>
+              {op.action === 'create' ? 'Oluşturuldu' : op.action === 'delete' ? 'Silindi' : 'Düzenlendi'}
+            </span>
+            {file && <ChevronRight size={10} className="text-muted-foreground shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 const PROVIDER_COLORS: Record<string, string> = {
   openai: 'text-green-400', anthropic: 'text-orange-400',
   google: 'text-blue-400', mistral: 'text-purple-400',
@@ -107,7 +152,7 @@ const PROVIDER_LABELS: Record<string, string> = {
 
 export default function AIPanel() {
   const {
-    settings, updateSettings, messages, addMessage, clearMessages,
+    settings, updateSettings, messages, addMessage, updateMessage, clearMessages,
     activeTab, projects, activeProject, createFile, updateFileContent, openFile,
     conversations, activeConversationId, setActiveConversationId,
     createConversation, deleteConversation, renameConversation,
@@ -181,10 +226,10 @@ export default function AIPanel() {
   };
 
   // ── File step animation ───────────────────────────────────────────────────
-  const applyFilesStepByStep = async (parsed: ReturnType<typeof parseFilesFromAIResponse>) => {
-    if (!parsed.length) return;
+  const applyFilesStepByStep = async (parsed: ReturnType<typeof parseFilesFromAIResponse>): Promise<FileOperationResult[]> => {
+    if (!parsed.length) return [];
     const target = activeProject || projects[0];
-    if (!target) return;
+    if (!target) return [];
 
     const getAllFiles = (files: typeof target.files): typeof target.files => {
       const result: typeof target.files = [];
@@ -203,6 +248,8 @@ export default function AIPanel() {
     }));
     setFileSteps(steps);
 
+    const results: FileOperationResult[] = [];
+
     for (let i = 0; i < parsed.length; i++) {
       const pf = parsed[i];
       setFileSteps(prev => prev.map((s, idx) => idx === i ? { ...s, status: 'working' } : s));
@@ -213,21 +260,31 @@ export default function AIPanel() {
         if (existing) {
           updateFileContent(existing.id, target.id, pf.content);
           openFile(existing, target);
+          results.push({ filename: pf.filename, action: 'edit', fileId: existing.id, projectId: target.id });
         } else {
           createFile(target.id, null, pf.filename, 'file');
           await new Promise(r => setTimeout(r, 200));
           const updatedProject = projects.find(p => p.id === target.id);
           if (updatedProject) {
             const newFile = getAllFiles(updatedProject.files).find(f => f.name === pf.filename);
-            if (newFile) openFile(newFile, updatedProject);
+            if (newFile) {
+              openFile(newFile, updatedProject);
+              results.push({ filename: pf.filename, action: 'create', fileId: newFile.id, projectId: target.id });
+            } else {
+              results.push({ filename: pf.filename, action: 'create', projectId: target.id });
+            }
+          } else {
+            results.push({ filename: pf.filename, action: 'create', projectId: target.id });
           }
         }
         setFileSteps(prev => prev.map((s, idx) => idx === i ? { ...s, status: 'done' } : s));
       } catch {
         setFileSteps(prev => prev.map((s, idx) => idx === i ? { ...s, status: 'error' } : s));
+        results.push({ filename: pf.filename, action: steps[i].action });
       }
     }
-    setTimeout(() => setFileSteps([]), 4000);
+    setTimeout(() => setFileSteps([]), 3000);
+    return results;
   };
 
   // ── Send message ──────────────────────────────────────────────────────────
@@ -259,13 +316,18 @@ export default function AIPanel() {
         ? response.replace(/```[\s\S]*?```/g, '').replace(/\n{3,}/g, '\n\n').trim()
         : response;
 
+      const aiMsgId = `a-${Date.now()}`;
       addMessage({
-        id: `a-${Date.now()}`, role: 'assistant',
+        id: aiMsgId, role: 'assistant',
         content: displayContent || (parsed.length > 0 ? `${parsed.length} dosya düzenlendi.` : 'Tamam.'),
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        fileOperations: [],
       });
 
-      if (parsed.length > 0) await applyFilesStepByStep(parsed);
+      if (parsed.length > 0) {
+        const ops = await applyFilesStepByStep(parsed);
+        if (ops.length > 0) updateMessage(aiMsgId, { fileOperations: ops });
+      }
     } catch {
       addMessage({ id: `e-${Date.now()}`, role: 'assistant', content: 'Bir hata oluştu. Lütfen tekrar deneyin.', timestamp: Date.now() });
     } finally {
@@ -596,6 +658,9 @@ export default function AIPanel() {
               </div>
               <div className={`max-w-[86%] px-3 py-2 rounded-xl ${msg.role === 'user' ? 'bg-primary/20 text-foreground rounded-tr-sm' : 'bg-muted text-foreground rounded-tl-sm'}`}>
                 <MessageContent content={msg.content} />
+                {msg.fileOperations && msg.fileOperations.length > 0 && (
+                  <FileOpsInMessage ops={msg.fileOperations} projects={projects} onOpenFile={openFile} />
+                )}
               </div>
             </motion.div>
           ))}

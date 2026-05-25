@@ -336,6 +336,7 @@ export async function callPuterAI(
         if (msg.includes('CORS') || msg.includes('NetworkError') || msg.includes('Failed to fetch')) {
           return `${selectedKey.provider} API çağrısı başarısız oldu. İnternet bağlantınızı kontrol edin ve tekrar deneyin.`;
         }
+        return `${selectedKey.provider} API hatası: ${msg || 'Bilinmeyen hata'}. Lütfen anahtarınızı ve model seçiminizi kontrol edin.`;
       }
     }
   }
@@ -348,11 +349,12 @@ export async function callPuterAI(
     try {
       const merged: { role: string; content: string }[] = [];
       let systemContent = '';
+      let systemApplied = false;
       for (const m of conversationMessages) {
         if (m.role === 'system') { systemContent = m.content; continue; }
-        if (m.role === 'user' && systemContent && merged.length === 0) {
+        if (m.role === 'user' && systemContent && !systemApplied) {
           merged.push({ role: 'user', content: `${systemContent}\n\n${m.content}` });
-          systemContent = '';
+          systemApplied = true;
         } else {
           merged.push({ role: m.role, content: m.content });
         }
