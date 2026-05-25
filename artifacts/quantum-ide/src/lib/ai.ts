@@ -229,6 +229,39 @@ async function callPerplexity(apiKey: string, modelId: string, messages: Msg[]):
   return data.choices?.[0]?.message?.content || '';
 }
 
+// Vercel AI Gateway — OpenAI-compatible, supports all providers via bearer token
+// Model format: "openai/gpt-4o", "anthropic/claude-sonnet-4-5", etc.
+// ALL_MODELS already uses this format, so model IDs are passed through unchanged.
+async function callVercelGateway(apiKey: string, modelId: string, messages: Msg[]): Promise<string> {
+  const chatMessages = messages.filter(m => m.role !== 'system');
+  const systemMsg = messages.find(m => m.role === 'system');
+
+  const body: Record<string, unknown> = {
+    model: modelId,
+    messages: systemMsg
+      ? [{ role: 'system', content: systemMsg.content }, ...chatMessages]
+      : chatMessages,
+    max_tokens: 4096,
+  };
+
+  const res = await fetch('https://ai-gateway.vercel.sh/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    const msg = (err as any)?.error?.message || res.statusText;
+    throw new Error(`Vercel Gateway ${res.status}: ${msg}`);
+  }
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || '';
+}
+
 async function callDirectAPI(
   provider: string,
   apiKey: string,
@@ -236,6 +269,7 @@ async function callDirectAPI(
   messages: Msg[]
 ): Promise<string> {
   switch (provider) {
+    case 'vercel':     return callVercelGateway(apiKey, modelId, messages);
     case 'openai':     return callOpenAI(apiKey, modelId, messages);
     case 'anthropic':  return callAnthropic(apiKey, modelId, messages);
     case 'google':     return callGoogle(apiKey, modelId, messages);
@@ -275,7 +309,7 @@ export async function callPuterAI(
   const modelProvider = modelInfo?.provider || null;
 
   // ── 1. Try the user-selected key first ───────────────────────────────────
-  const AI_PROVIDERS = ['openai', 'anthropic', 'google', 'mistral', 'deepseek', 'perplexity'];
+  const AI_PROVIDERS = ['openai', 'anthropic', 'google', 'mistral', 'deepseek', 'perplexity', 'vercel'];
 
   if (apiKeys && apiKeys.length > 0) {
     let selectedKey: ApiKeyInfo | null = null;

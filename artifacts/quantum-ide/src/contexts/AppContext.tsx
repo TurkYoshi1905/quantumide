@@ -1,3 +1,4 @@
+// @refresh reset
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import type { User, Project, FileNode, Tab, AppSettings, ChatMessage, Conversation } from "@/types";
 import { dbSaveProjects, dbLoadProjects, dbSet, dbGet } from "@/lib/db";
